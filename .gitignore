@@ -1,0 +1,43 @@
+# Qt Creator / IDE local settings
+.qtcreator/
+*.user
+*.user.*
+.vscode/
+
+# CMake and compiler output
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*_autogen/
+
+# Packaged application and binaries
+dist/
+*.exe
+*.dll
+*.a
+*.lib
+*.o
+*.obj
+*.pdb
+*.zip
+*.7z
+
+# Runtime configuration and generated data
+config.ini
+data/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# OS/editor temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*~
