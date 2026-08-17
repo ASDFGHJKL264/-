@@ -2,6 +2,7 @@
 #include "alarmdialog.h"
 #include "historydialog.h"
 #include "sensorconfigdialog.h"
+#include "sensorutils.h"
 
 #include <QApplication>
 #include <QDir>
@@ -519,8 +520,7 @@ void MainWindow::requestSensor(int index)
             if (temperatureOffset < result.valueCount() && humidityOffset < result.valueCount()) {
                 const quint16 rawTemperature = result.value(temperatureOffset);
                 const quint16 rawHumidity = result.value(humidityOffset);
-                const double temperature = rawTemperature >= 10000
-                    ? -(rawTemperature - 10000) * 0.1 : rawTemperature * 0.1;
+                const double temperature = SensorUtils::parseTemperature(rawTemperature);
                 handleSample(index, temperature, rawHumidity * 0.1);
             } else {
                 printLog(QString("%1 返回的寄存器数量不足。").arg(sensor.name), true);
@@ -549,10 +549,10 @@ void MainWindow::handleSample(int index, double temperature, double humidity)
             printLog(QString("历史数据写入失败：%1").arg(databaseError), true);
         }
     }
-    const bool temperatureAlarm =
-        temperature < m_config.temperatureMin || temperature > m_config.temperatureMax;
-    const bool humidityAlarm =
-        humidity < m_config.humidityMin || humidity > m_config.humidityMax;
+    const bool temperatureAlarm = SensorUtils::isOutsideThreshold(
+        temperature, m_config.temperatureMin, m_config.temperatureMax);
+    const bool humidityAlarm = SensorUtils::isOutsideThreshold(
+        humidity, m_config.humidityMin, m_config.humidityMax);
     if (temperatureAlarm &&
         (!m_lastAlarm[index][0].isValid() || m_lastAlarm[index][0].secsTo(now) >= 60)) {
         printLog(QString("【报警】%1 温度 %2℃ 超出阈值。")
