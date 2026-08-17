@@ -19,6 +19,8 @@ qt_add_executable(Qwenshiducaiji
     historydialog.cpp
     alarmdialog.h
     alarmdialog.cpp
+    sensorconfigdialog.h
+    sensorconfigdialog.cpp
     qcustomplot.h
     qcustomplot.cpp
 )

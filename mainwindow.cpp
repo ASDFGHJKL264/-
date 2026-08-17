@@ -1,11 +1,9 @@
 #include "mainwindow.h"
 #include "alarmdialog.h"
 #include "historydialog.h"
+#include "sensorconfigdialog.h"
 
 #include <QApplication>
-#include <QCheckBox>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QGridLayout>
@@ -19,7 +17,6 @@
 #include <QSerialPortInfo>
 #include <QSettings>
 #include <QSet>
-#include <QSpinBox>
 #include <QTextStream>
 #include <QtMath>
 #include <QVBoxLayout>
@@ -112,93 +109,14 @@ void MainWindow::showSensorConfigDialog()
         return;
     }
 
-    QDialog dialog(this);
-    dialog.setWindowTitle("传感器配置");
-    dialog.resize(820, 300);
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *grid = new QGridLayout;
-    const QStringList headers = {
-        "模块", "启用", "名称", "站地址", "寄存器类型", "温度地址", "湿度地址"
-    };
-    for (int column = 0; column < headers.size(); ++column) {
-        auto *label = new QLabel(headers.at(column));
-        label->setAlignment(Qt::AlignCenter);
-        grid->addWidget(label, 0, column);
-    }
+    SensorConfigDialog dialog(m_config, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
 
-    QCheckBox *enabledEdits[kSensorLimit]{};
-    QLineEdit *nameEdits[kSensorLimit]{};
-    QSpinBox *slaveEdits[kSensorLimit]{};
-    QComboBox *typeEdits[kSensorLimit]{};
-    QSpinBox *temperatureEdits[kSensorLimit]{};
-    QSpinBox *humidityEdits[kSensorLimit]{};
-    for (int i = 0; i < kSensorLimit; ++i) {
-        const auto &sensor = m_config.sensors[i];
-        grid->addWidget(new QLabel(QString("模块%1").arg(i + 1)), i + 1, 0);
-        enabledEdits[i] = new QCheckBox;
-        enabledEdits[i]->setChecked(sensor.enabled);
-        grid->addWidget(enabledEdits[i], i + 1, 1, Qt::AlignCenter);
-        nameEdits[i] = new QLineEdit(sensor.name);
-        grid->addWidget(nameEdits[i], i + 1, 2);
-        slaveEdits[i] = new QSpinBox;
-        slaveEdits[i]->setRange(1, 247);
-        slaveEdits[i]->setValue(sensor.slaveId);
-        grid->addWidget(slaveEdits[i], i + 1, 3);
-        typeEdits[i] = new QComboBox;
-        typeEdits[i]->addItem("保持寄存器（功能码03）", false);
-        typeEdits[i]->addItem("输入寄存器（功能码04）", true);
-        typeEdits[i]->setCurrentIndex(sensor.useInputRegisters ? 1 : 0);
-        grid->addWidget(typeEdits[i], i + 1, 4);
-        temperatureEdits[i] = new QSpinBox;
-        temperatureEdits[i]->setRange(0, 65535);
-        temperatureEdits[i]->setValue(sensor.temperatureRegister);
-        grid->addWidget(temperatureEdits[i], i + 1, 5);
-        humidityEdits[i] = new QSpinBox;
-        humidityEdits[i]->setRange(0, 65535);
-        humidityEdits[i]->setValue(sensor.humidityRegister);
-        grid->addWidget(humidityEdits[i], i + 1, 6);
-    }
-    grid->setColumnStretch(2, 1);
-    grid->setColumnStretch(4, 1);
-    layout->addLayout(grid);
-    auto *hint = new QLabel(
-        "说明：每个启用模块必须使用不同站地址。保存后立即生效，下次启动自动加载。"
-        "未连接的模块建议不要启用。");
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-    auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Save | QDialogButtonBox::Cancel);
-    buttons->button(QDialogButtonBox::Save)->setText("保存");
-    buttons->button(QDialogButtonBox::Cancel)->setText("取消");
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        AppConfig candidate = m_config;
-        for (int i = 0; i < kSensorLimit; ++i) {
-            auto &sensor = candidate.sensors[i];
-            sensor.enabled = enabledEdits[i]->isChecked();
-            sensor.name = nameEdits[i]->text().trimmed();
-            if (sensor.name.isEmpty())
-                sensor.name = QString("温湿度模块%1").arg(i + 1);
-            sensor.slaveId = slaveEdits[i]->value();
-            sensor.useInputRegisters = typeEdits[i]->currentData().toBool();
-            sensor.temperatureRegister = temperatureEdits[i]->value();
-            sensor.humidityRegister = humidityEdits[i]->value();
-        }
-        const AppConfig original = m_config;
-        m_config = candidate;
-        QString error;
-        if (!validateConfig(&error)) {
-            m_config = original;
-            QMessageBox::warning(&dialog, "配置无效", error);
-            return;
-        }
-        saveConfig();
-        applyConfigToUi();
-        printLog("传感器配置已更新。重新建立连接后将按新配置轮询。");
-        dialog.accept();
-    });
-    dialog.exec();
+    dialog.applyTo(m_config);
+    saveConfig();
+    applyConfigToUi();
+    printLog("传感器配置已更新。重新建立连接后将按新配置轮询。");
 }
 
 MainWindow::~MainWindow()
