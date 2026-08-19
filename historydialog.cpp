@@ -126,17 +126,18 @@ void HistoryDialog::queryData()
         auto *humidityGraph = m_plot->graph(i * 2 + 1);
         temperatureGraph->setData(timeValues[i], temperatures[i]);
         humidityGraph->setData(timeValues[i], humidities[i]);
-        const bool showGraph = !timeValues[i].isEmpty()
-            && (sensorIndex < 0 || sensorIndex == i);
-        temperatureGraph->setVisible(showGraph);
-        humidityGraph->setVisible(showGraph);
+        const bool selected = sensorIndex < 0 || sensorIndex == i;
+        const bool hasData = !timeValues[i].isEmpty();
+        temperatureGraph->setVisible(selected && hasData);
+        humidityGraph->setVisible(selected && hasData);
         temperatureGraph->removeFromLegend();
         humidityGraph->removeFromLegend();
-        if (showGraph) {
+        if (selected) {
             temperatureGraph->addToLegend();
             humidityGraph->addToLegend();
-            hasAnyData = true;
         }
+        if (selected && hasData)
+            hasAnyData = true;
     }
     if (hasAnyData)
         m_plot->rescaleAxes();
