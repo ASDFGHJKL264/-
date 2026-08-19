@@ -40,12 +40,22 @@ HistoryDialog::HistoryDialog(const QString &connectionName, QWidget *parent)
     filterLayout->addWidget(queryButton);
 
     m_plot = new QCustomPlot;
-    m_plot->addGraph();
-    m_plot->graph(0)->setName("温度");
-    m_plot->graph(0)->setPen(QPen(Qt::red, 2));
-    m_plot->addGraph();
-    m_plot->graph(1)->setName("湿度");
-    m_plot->graph(1)->setPen(QPen(Qt::blue, 2));
+    const QColor temperatureColors[4] = {
+        QColor(211, 47, 47), QColor(245, 124, 0),
+        QColor(123, 31, 162), QColor(0, 137, 123)
+    };
+    const QColor humidityColors[4] = {
+        QColor(25, 118, 210), QColor(0, 151, 167),
+        QColor(57, 73, 171), QColor(46, 125, 50)
+    };
+    for (int i = 0; i < 4; ++i) {
+        m_plot->addGraph();
+        m_plot->graph(i * 2)->setName(QString("模块%1 温度").arg(i + 1));
+        m_plot->graph(i * 2)->setPen(QPen(temperatureColors[i], 2));
+        m_plot->addGraph();
+        m_plot->graph(i * 2 + 1)->setName(QString("模块%1 湿度").arg(i + 1));
+        m_plot->graph(i * 2 + 1)->setPen(QPen(humidityColors[i], 2, Qt::DashLine));
+    }
     m_plot->legend->setVisible(true);
     m_plot->xAxis->setLabel("时间");
     m_plot->yAxis->setLabel("温度/湿度");
@@ -76,7 +86,7 @@ void HistoryDialog::queryData()
     }
     QSqlDatabase database = QSqlDatabase::database(m_connectionName);
     QSqlQuery query(database);
-    QString sql = "SELECT sample_time,sensor_name,slave_id,temperature,humidity "
+    QString sql = "SELECT sample_time,sensor_name,slave_id,temperature,humidity,sensor_index "
                   "FROM sensor_history WHERE sample_time>=? AND sample_time<=?";
     const int sensorIndex = m_sensorCombo->currentData().toInt();
     if (sensorIndex >= 0)
@@ -92,7 +102,9 @@ void HistoryDialog::queryData()
         return;
     }
     m_table->setRowCount(0);
-    QVector<double> timeValues, temperatures, humidities;
+    QVector<double> timeValues[4];
+    QVector<double> temperatures[4];
+    QVector<double> humidities[4];
     while (query.next()) {
         const int row = m_table->rowCount();
         m_table->insertRow(row);
@@ -100,13 +112,33 @@ void HistoryDialog::queryData()
         m_table->setItem(row, 0, new QTableWidgetItem(time.toString("yyyy-MM-dd HH:mm:ss")));
         for (int column = 1; column < 5; ++column)
             m_table->setItem(row, column, new QTableWidgetItem(query.value(column).toString()));
-        timeValues.append(time.toMSecsSinceEpoch() / 1000.0);
-        temperatures.append(query.value(3).toDouble());
-        humidities.append(query.value(4).toDouble());
+        const int rowSensorIndex = query.value(5).toInt();
+        if (rowSensorIndex < 0 || rowSensorIndex >= 4)
+            continue;
+        timeValues[rowSensorIndex].append(time.toMSecsSinceEpoch() / 1000.0);
+        temperatures[rowSensorIndex].append(query.value(3).toDouble());
+        humidities[rowSensorIndex].append(query.value(4).toDouble());
     }
-    m_plot->graph(0)->setData(timeValues, temperatures);
-    m_plot->graph(1)->setData(timeValues, humidities);
-    if (!timeValues.isEmpty())
+
+    bool hasAnyData = false;
+    for (int i = 0; i < 4; ++i) {
+        auto *temperatureGraph = m_plot->graph(i * 2);
+        auto *humidityGraph = m_plot->graph(i * 2 + 1);
+        temperatureGraph->setData(timeValues[i], temperatures[i]);
+        humidityGraph->setData(timeValues[i], humidities[i]);
+        const bool showGraph = !timeValues[i].isEmpty()
+            && (sensorIndex < 0 || sensorIndex == i);
+        temperatureGraph->setVisible(showGraph);
+        humidityGraph->setVisible(showGraph);
+        temperatureGraph->removeFromLegend();
+        humidityGraph->removeFromLegend();
+        if (showGraph) {
+            temperatureGraph->addToLegend();
+            humidityGraph->addToLegend();
+            hasAnyData = true;
+        }
+    }
+    if (hasAnyData)
         m_plot->rescaleAxes();
     m_plot->replot();
 }
