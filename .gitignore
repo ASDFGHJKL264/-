@@ -41,3 +41,15 @@ Thumbs.db
 *.tmp
 *.bak
 *~
+
+# Credentials and private local settings
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials*.json
+secrets*.json

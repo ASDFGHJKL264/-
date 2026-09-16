@@ -14,17 +14,15 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
-SensorConfigDialog::SensorConfigDialog(const AppConfig &config, QWidget *parent)
-    : QDialog(parent)
+SensorConfigDialog::SensorConfigDialog(const AppConfig &config, QWidget *parent) : QDialog(parent)
 {
     setWindowTitle("传感器配置");
     resize(820, 300);
 
     auto *layout = new QVBoxLayout(this);
     auto *grid = new QGridLayout;
-    const QStringList headers = {
-        "模块", "启用", "名称", "站地址", "寄存器类型", "温度地址", "湿度地址"
-    };
+    const QStringList headers = {"模块",       "启用",     "名称",    "站地址",
+                                 "寄存器类型", "温度地址", "湿度地址"};
     for (int column = 0; column < headers.size(); ++column) {
         auto *label = new QLabel(headers.at(column));
         label->setAlignment(Qt::AlignCenter);
@@ -67,15 +65,24 @@ SensorConfigDialog::SensorConfigDialog(const AppConfig &config, QWidget *parent)
     grid->setColumnStretch(2, 1);
     grid->setColumnStretch(4, 1);
     layout->addLayout(grid);
+    m_simulator = new QCheckBox("使用内置模拟器（不需要硬件）");
+    m_simulator->setChecked(config.simulatorEnabled);
+    layout->addWidget(m_simulator);
+    auto *intervalRow = new QHBoxLayout;
+    intervalRow->addWidget(new QLabel("目标轮询周期(ms，通信耗时另计)："));
+    m_interval = new QSpinBox;
+    m_interval->setRange(100, 60000);
+    m_interval->setValue(config.pollIntervalMs);
+    intervalRow->addWidget(m_interval);
+    layout->addLayout(intervalRow);
 
-    auto *hint = new QLabel(
-        "说明：每个启用模块必须使用不同站地址。保存后立即生效，下次启动自动加载。"
-        "未连接的模块建议不要启用。");
+    auto *hint =
+        new QLabel("说明：每个启用模块必须使用不同站地址。保存后立即生效，下次启动自动加载。"
+                   "未连接的模块建议不要启用。");
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
-    auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Save)->setText("保存");
     buttons->button(QDialogButtonBox::Cancel)->setText("取消");
     layout->addWidget(buttons);
@@ -85,6 +92,8 @@ SensorConfigDialog::SensorConfigDialog(const AppConfig &config, QWidget *parent)
 
 void SensorConfigDialog::applyTo(AppConfig &config) const
 {
+    config.simulatorEnabled = m_simulator->isChecked();
+    config.pollIntervalMs = m_interval->value();
     for (int i = 0; i < SensorLimit; ++i) {
         auto &sensor = config.sensors[i];
         sensor.enabled = m_enabledEdits[i]->isChecked();
@@ -113,8 +122,7 @@ bool SensorConfigDialog::validateInput(QString *errorMessage) const
         }
         addresses.insert(slaveId);
         if (qAbs(m_temperatureEdits[i]->value() - m_humidityEdits[i]->value()) >= 125) {
-            *errorMessage = QString("模块%1的温湿度寄存器跨度超过Modbus单次读取上限。")
-                                .arg(i + 1);
+            *errorMessage = QString("模块%1的温湿度寄存器跨度超过Modbus单次读取上限。").arg(i + 1);
             return false;
         }
     }

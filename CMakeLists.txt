@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 project(Qwenshiducaiji LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(MINGW)
     add_compile_options(-Wa,-mbig-obj)
 endif()
@@ -23,6 +25,9 @@ qt_add_executable(Qwenshiducaiji
     sensorconfigdialog.cpp
     sensorutils.h
     sensorutils.cpp
+    monitorcore.h monitorcore.cpp
+    monitorservice.h monitorservice.cpp
+    monitordialog.h monitordialog.cpp
     qcustomplot.h
     qcustomplot.cpp
 )
@@ -60,4 +65,14 @@ if(BUILD_TESTING)
     target_include_directories(QwenshiducaijiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(QwenshiducaijiTests PRIVATE Qt::Core Qt::Test)
     add_test(NAME SensorCoreTests COMMAND QwenshiducaijiTests)
+    qt_add_executable(MonitorBusinessTests tests/test_monitorbusiness.cpp monitorcore.h monitorcore.cpp monitorservice.h monitorservice.cpp)
+    target_include_directories(MonitorBusinessTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(MonitorBusinessTests PRIVATE Qt::Core Qt::Sql Qt::Test)
+    add_test(NAME MonitorBusinessTests COMMAND MonitorBusinessTests)
+    set_tests_properties(MonitorBusinessTests PROPERTIES TIMEOUT 60)
+    qt_add_executable(MonitorUiTests tests/test_monitorui.cpp monitorcore.h monitorcore.cpp monitorservice.h monitorservice.cpp monitordialog.h monitordialog.cpp)
+    target_include_directories(MonitorUiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(MonitorUiTests PRIVATE Qt::Core Qt::Widgets Qt::Sql Qt::Test)
+    add_test(NAME MonitorUiTests COMMAND MonitorUiTests -platform offscreen)
+    set_tests_properties(MonitorUiTests PROPERTIES TIMEOUT 30)
 endif()

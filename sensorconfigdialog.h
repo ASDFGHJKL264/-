@@ -13,14 +13,14 @@ class SensorConfigDialog final : public QDialog
 {
     Q_OBJECT
 
-public:
+  public:
     explicit SensorConfigDialog(const AppConfig &config, QWidget *parent = nullptr);
     void applyTo(AppConfig &config) const;
 
-public slots:
+  public slots:
     void accept() override;
 
-private:
+  private:
     bool validateInput(QString *errorMessage) const;
 
     static constexpr int SensorLimit = 4;
@@ -30,6 +30,8 @@ private:
     QComboBox *m_typeEdits[SensorLimit]{};
     QSpinBox *m_temperatureEdits[SensorLimit]{};
     QSpinBox *m_humidityEdits[SensorLimit]{};
+    QCheckBox *m_simulator;
+    QSpinBox *m_interval;
 };
 
 #endif

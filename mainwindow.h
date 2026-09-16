@@ -14,8 +14,7 @@
 #include <QTextEdit>
 #include <QTimer>
 
-struct SensorConfig
-{
+struct SensorConfig {
     bool enabled = false;
     QString name;
     int slaveId = 1;
@@ -24,8 +23,12 @@ struct SensorConfig
     int humidityRegister = 1;
 };
 
-struct AppConfig
-{
+class MonitorService;
+class QThread;
+class QGroupBox;
+class MonitorDialog;
+
+struct AppConfig {
     QString port = "COM1";
     int baud = 9600;
     int dataBits = 8;
@@ -44,11 +47,11 @@ class MainWindow final : public QMainWindow
 {
     Q_OBJECT
 
-public:
+  public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
-private:
+  private:
     void initUI();
     void initSerialParameters();
     void refreshPortList();
@@ -66,6 +69,9 @@ private:
     void initializeDatabase();
     void initializeDataMenus();
     void showSensorConfigDialog();
+    void initializeMonitoring();
+    void showMonitoring();
+    void stopAcquisition();
     QString configFilePath() const;
     QString logDirectoryPath() const;
     int nextEnabledSensor(int after) const;
@@ -95,6 +101,14 @@ private:
     QDateTime m_lastAlarm[4][2];
     DatabaseManager m_database;
     bool m_databaseAvailable = false;
+    MonitorService *m_monitor = nullptr;
+    QThread *m_monitorThread = nullptr;
+    QGroupBox *m_sensorBoxes[4]{};
+    QPointer<MonitorDialog> m_monitorDialog;
+    bool m_monitorReady = false, m_taskActive = false, m_collecting = false;
+    int m_queuedSamples = 0;
+    quint64 m_acquisitionGeneration = 0;
+    bool m_businessLocked = false;
 };
 
 #endif
