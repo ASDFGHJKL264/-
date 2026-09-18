@@ -7,6 +7,7 @@
 #include "monitordialog.h"
 #include <QThread>
 #include <QStatusBar>
+#include <QSplitter>
 #include <cmath>
 
 #include <QApplication>
@@ -155,7 +156,7 @@ MainWindow::~MainWindow()
 void MainWindow::initUI()
 {
     setWindowTitle("基于 Modbus RTU 的温湿度数据采集");
-    resize(980, 820);
+    resize(1100, 860);
 
     auto *groupCommunication = new QGroupBox("通信参数");
     auto *communicationLayout = new QGridLayout(groupCommunication);
@@ -183,6 +184,8 @@ void MainWindow::initUI()
 
     auto *sensorWidget = new QWidget;
     auto *sensorLayout = new QGridLayout(sensorWidget);
+    sensorLayout->setContentsMargins(0, 0, 0, 0);
+    sensorLayout->setVerticalSpacing(6);
     for (int i = 0; i < kSensorLimit; ++i) {
         auto *box = new QGroupBox(QString("温湿度模块%1").arg(i + 1));
         m_sensorBoxes[i] = box;
@@ -212,13 +215,22 @@ void MainWindow::initUI()
     auto *groupLog = new QGroupBox("系统日志");
     auto *logLayout = new QVBoxLayout(groupLog);
     m_txtLog = new QTextEdit;
+    m_txtLog->setMinimumHeight(45);
     m_txtLog->setReadOnly(true);
     logLayout->addWidget(m_txtLog);
 
     m_plot = new QCustomPlot;
+    m_plot->setMinimumHeight(280);
     m_plot->xAxis->setLabel("采样序号");
     m_plot->yAxis->setLabel("温度/湿度");
     m_plot->legend->setVisible(true);
+    // Keep legends outside the axes, with one column per module.
+    m_plot->axisRect()->insetLayout()->take(m_plot->legend);
+    m_plot->plotLayout()->addElement(1, 0, m_plot->legend);
+    m_plot->legend->setFillOrder(QCPLayoutGrid::foRowsFirst);
+    m_plot->legend->setWrap(2);
+    m_plot->legend->setBorderPen(Qt::NoPen);
+    m_plot->plotLayout()->setRowStretchFactor(1, 0.001);
     const QColor temperatureColors[4] = {Qt::red, Qt::blue, Qt::green, Qt::magenta};
     const QColor humidityColors[4] = {Qt::darkRed, Qt::darkBlue, Qt::darkGreen, Qt::darkMagenta};
     for (int i = 0; i < kSensorLimit; ++i) {
@@ -259,14 +271,20 @@ void MainWindow::initUI()
     auto *mainLayout = new QVBoxLayout;
     mainLayout->addWidget(groupCommunication);
     mainLayout->addWidget(sensorWidget);
-    mainLayout->addWidget(groupPlot);
-    mainLayout->addWidget(groupLog);
-    mainLayout->setStretchFactor(groupCommunication, 1);
-    mainLayout->setStretchFactor(sensorWidget, 2);
-    mainLayout->setStretchFactor(groupPlot, 4);
-    mainLayout->setStretchFactor(groupLog, 3);
-    mainLayout->setSpacing(12);
-    mainLayout->setContentsMargins(14, 14, 14, 14);
+    auto *plotLogSplitter = new QSplitter(Qt::Vertical);
+    plotLogSplitter->setObjectName("plotLogSplitter");
+    plotLogSplitter->addWidget(groupPlot);
+    plotLogSplitter->addWidget(groupLog);
+    plotLogSplitter->setChildrenCollapsible(false);
+    plotLogSplitter->setHandleWidth(7);
+    plotLogSplitter->setStretchFactor(0, 5);
+    plotLogSplitter->setStretchFactor(1, 1);
+    plotLogSplitter->setSizes({450, 90});
+    mainLayout->addWidget(plotLogSplitter, 1);
+    groupCommunication->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    sensorWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    mainLayout->setSpacing(6);
+    mainLayout->setContentsMargins(10, 8, 10, 8);
     auto *central = new QWidget;
     central->setLayout(mainLayout);
     setCentralWidget(central);
