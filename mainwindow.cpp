@@ -8,6 +8,9 @@
 #include <QThread>
 #include <QStatusBar>
 #include <QSplitter>
+#include <QSignalBlocker>
+#include <QAbstractItemView>
+#include "serialportpolicy.h"
 #include <cmath>
 
 #include <QApplication>
@@ -48,6 +51,11 @@ MainWindow::MainWindow(QWidget *parent)
     initializeDatabase();
     initializeDataMenus();
     initializeMonitoring();
+
+    auto *portTimer = new QTimer(this);
+    portTimer->setInterval(1000);
+    connect(portTimer, &QTimer::timeout, this, &MainWindow::refreshPortList);
+    portTimer->start();
 
     m_pollTimer->setSingleShot(true);
     connect(m_pollTimer, &QTimer::timeout, this, &MainWindow::pollNextSensor);
@@ -334,7 +342,7 @@ void MainWindow::loadConfig()
 
 void MainWindow::applyConfigToUi()
 {
-    m_cbxPort->setCurrentText(m_config.port);
+    // refreshPortList owns port selection; never replace a manual choice here.
     m_cbxBaud->setCurrentText(QString::number(m_config.baud));
     m_cbxParity->setCurrentText(m_config.parity);
     m_cbxDataBit->setCurrentText(QString::number(m_config.dataBits));
@@ -392,9 +400,12 @@ void MainWindow::saveConfig()
         QMessageBox::information(this, "任务运行中", "请先结束任务再保存参数。");
         return;
     }
-    m_config.port = m_cbxPort->currentData().toString();
-    if (m_config.port.isEmpty())
-        m_config.port = m_cbxPort->currentText();
+    QStringList availablePorts;
+    for (const auto &port : QSerialPortInfo::availablePorts())
+        availablePorts.append(port.portName());
+    m_config.port = SerialPortPolicy::savedPort(
+        availablePorts, m_cbxPort->currentData().toString(), m_config.port,
+        m_config.simulatorEnabled);
     m_config.baud = m_cbxBaud->currentText().toInt();
     m_config.parity = m_cbxParity->currentText();
     m_config.dataBits = m_cbxDataBit->currentText().toInt();
@@ -433,19 +444,44 @@ void MainWindow::saveConfig()
 
 void MainWindow::refreshPortList()
 {
-    const QString configuredPort = m_config.port;
-    m_cbxPort->clear();
-    const auto ports = QSerialPortInfo::availablePorts();
-    for (const auto &port : ports)
-        m_cbxPort->addItem(port.portName(), port.portName());
-    if (ports.isEmpty() && !m_config.simulatorEnabled)
-        m_cbxPort->addItem("未检测到串口", "");
+    // Qt reports unplug errors through the existing Modbus error/state signals.
+    // Never rebuild a selector while connected, collecting, or choosing an item.
+    if (m_collecting || m_modbusClient->state() != QModbusDevice::UnconnectedState ||
+        m_cbxPort->view()->isVisible())
+        return;
+
+    QStringList ports;
+    for (const auto &port : QSerialPortInfo::availablePorts())
+        ports.append(port.portName());
+    ports.removeDuplicates();
+    ports.sort(Qt::CaseInsensitive);
+
+    QStringList expected = ports;
     if (m_config.simulatorEnabled)
-        m_cbxPort->addItem("模拟器", "SIMULATOR");
-    const int configuredIndex =
-        m_cbxPort->findData(m_config.simulatorEnabled ? "SIMULATOR" : configuredPort);
-    if (configuredIndex >= 0)
-        m_cbxPort->setCurrentIndex(configuredIndex);
+        expected.append("SIMULATOR");
+    else if (expected.isEmpty())
+        expected.append(QString());
+
+    QStringList displayed;
+    for (int i = 0; i < m_cbxPort->count(); ++i)
+        displayed.append(m_cbxPort->itemData(i).toString());
+    const QString selected = SerialPortPolicy::preferred(
+        ports, m_cbxPort->currentData().toString(), m_config.port,
+        m_config.simulatorEnabled);
+    if (displayed == expected && m_cbxPort->currentData().toString() == selected)
+        return;
+
+    const QSignalBlocker blocker(m_cbxPort);
+    if (displayed != expected) {
+        m_cbxPort->clear();
+        for (const auto &port : ports)
+            m_cbxPort->addItem(port, port);
+        if (m_config.simulatorEnabled)
+            m_cbxPort->addItem("模拟器", "SIMULATOR");
+        else if (ports.isEmpty())
+            m_cbxPort->addItem("未检测到串口", "");
+    }
+    m_cbxPort->setCurrentIndex(m_cbxPort->findData(selected));
 }
 
 void MainWindow::toggleConnect()

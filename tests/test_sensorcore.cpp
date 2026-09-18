@@ -1,4 +1,5 @@
 #include "sensorutils.h"
+#include "serialportpolicy.h"
 
 #include <QSettings>
 #include <QTemporaryDir>
@@ -10,6 +11,8 @@ class SensorCoreTest final : public QObject
 
 private slots:
     void crc16();
+    void serialPortSelection();
+    void serialPortPersistence();
     void temperatureParsing_data();
     void temperatureParsing();
     void configReadWrite();
@@ -17,6 +20,29 @@ private slots:
     void alarmThreshold_data();
     void alarmThreshold();
 };
+
+void SensorCoreTest::serialPortSelection()
+{
+    using SerialPortPolicy::preferred;
+    QCOMPARE(preferred({}, "", "COM1", false), QString());
+    QCOMPARE(preferred({"COM3"}, "", "COM1", false), QString("COM3"));
+    QCOMPARE(preferred({"COM3", "COM5"}, "COM5", "COM3", false), QString("COM5"));
+    QCOMPARE(preferred({"COM3", "COM5"}, "COM9", "COM5", false), QString("COM5"));
+    QCOMPARE(preferred({"COM3"}, "COM5", "COM5", false), QString("COM3"));
+    QCOMPARE(preferred({}, "COM5", "COM5", true), QString("SIMULATOR"));
+    QCOMPARE(preferred({"COM3"}, "SIMULATOR", "COM3", false), QString("COM3"));
+}
+
+void SensorCoreTest::serialPortPersistence()
+{
+    using SerialPortPolicy::savedPort;
+    QCOMPARE(savedPort({}, "", "COM5", false), QString("COM5"));
+    QCOMPARE(savedPort({}, "unavailable", "COM5", false), QString("COM5"));
+    QCOMPARE(savedPort({"COM3"}, "SIMULATOR", "COM5", true), QString("COM5"));
+    QCOMPARE(savedPort({"COM3"}, "COM3", "COM5", true), QString("COM5"));
+    QCOMPARE(savedPort({"COM3"}, "COM9", "COM5", false), QString("COM5"));
+    QCOMPARE(savedPort({"COM3"}, "COM3", "COM5", false), QString("COM3"));
+}
 
 void SensorCoreTest::crc16()
 {

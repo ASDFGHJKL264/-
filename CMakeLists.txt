@@ -24,6 +24,7 @@ qt_add_executable(Qwenshiducaiji
     sensorconfigdialog.h
     sensorconfigdialog.cpp
     sensorutils.h
+    serialportpolicy.h
     sensorutils.cpp
     monitorcore.h monitorcore.cpp
     monitorservice.h monitorservice.cpp
