@@ -1,4 +1,5 @@
 #include "historydialog.h"
+#include "historyquery.h"
 
 #include <QComboBox>
 #include <QDateTime>
@@ -8,14 +9,11 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QSqlDatabase>
-#include <QSqlError>
-#include <QSqlQuery>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
-HistoryDialog::HistoryDialog(const QString &connectionName, QWidget *parent)
-    : QDialog(parent), m_connectionName(connectionName)
+HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
+    : QDialog(parent), m_query(new HistoryQuery(databasePath, this))
 {
     setWindowTitle("温湿度历史查询");
     resize(900, 650);
@@ -30,7 +28,8 @@ HistoryDialog::HistoryDialog(const QString &connectionName, QWidget *parent)
     m_sensorCombo->addItem("全部模块", -1);
     for (int i = 0; i < 4; ++i)
         m_sensorCombo->addItem(QString("模块%1").arg(i + 1), i);
-    auto *queryButton = new QPushButton("查询");
+    m_queryButton = new QPushButton("查询");
+    auto *queryButton = m_queryButton;
     filterLayout->addWidget(new QLabel("开始："));
     filterLayout->addWidget(m_startEdit);
     filterLayout->addWidget(new QLabel("结束："));
@@ -74,50 +73,79 @@ HistoryDialog::HistoryDialog(const QString &connectionName, QWidget *parent)
     layout->addLayout(filterLayout);
     layout->addWidget(m_plot, 3);
     layout->addWidget(m_table, 2);
-    connect(queryButton, &QPushButton::clicked, this, &HistoryDialog::queryData);
+    connect(queryButton, &QPushButton::clicked, this, [this] { m_offset = 0; queryData(); });
+    auto *pages = new QHBoxLayout;
+    m_previous = new QPushButton("上一页");
+    m_next = new QPushButton("下一页");
+    m_pageLabel = new QLabel;
+    pages->addWidget(m_previous); pages->addWidget(m_pageLabel); pages->addWidget(m_next);
+    layout->addLayout(pages);
+    const auto resetPage = [this] {
+        m_offset = 0;
+        m_previous->setEnabled(false); m_next->setEnabled(false);
+        m_pageLabel->setText("查询条件已变化，请重新查询");
+    };
+    connect(m_startEdit, &QDateTimeEdit::dateTimeChanged, this, resetPage);
+    connect(m_endEdit, &QDateTimeEdit::dateTimeChanged, this, resetPage);
+    connect(m_sensorCombo, &QComboBox::currentIndexChanged, this, resetPage);
+    connect(m_previous, &QPushButton::clicked, this, [this] {
+        m_offset = qMax(0, m_offset - HistoryQuery::PageSize); queryData();
+    });
+    connect(m_next, &QPushButton::clicked, this, [this] {
+        m_offset += HistoryQuery::PageSize; queryData();
+    });
+    connect(m_query, &HistoryQuery::finished, this,
+            [this](int operation, const QVariantList &rows, bool more, const QString &error) {
+        m_queryButton->setEnabled(true);
+        m_startEdit->setEnabled(true); m_endEdit->setEnabled(true); m_sensorCombo->setEnabled(true);
+        m_previous->setEnabled(m_offset > 0); m_next->setEnabled(more);
+        if (!error.isEmpty()) {
+            m_pageLabel->setText("查询失败");
+            QMessageBox::warning(this, "数据库操作失败", error); return;
+        }
+        if (operation == HistoryQuery::ClearAlarms) { m_offset = 0; queryData(); return; }
+        showRows(rows);
+        m_pageLabel->setText(QString("第 %1 页 · 本页 %2 条（每页最多500条）")
+            .arg(m_offset / HistoryQuery::PageSize + 1).arg(rows.size()));
+    });
     queryData();
 }
 
 void HistoryDialog::queryData()
 {
     if (m_startEdit->dateTime() > m_endEdit->dateTime()) {
-        QMessageBox::warning(this, "查询条件", "开始时间不能晚于结束时间。");
-        return;
+        QMessageBox::warning(this, "查询条件", "开始时间不能晚于结束时间"); return;
     }
-    QSqlDatabase database = QSqlDatabase::database(m_connectionName);
-    QSqlQuery query(database);
-    QString sql = "SELECT sample_time,sensor_name,slave_id,temperature,humidity,sensor_index "
-                  "FROM sensor_history WHERE sample_time>=? AND sample_time<=?";
-    const int sensorIndex = m_sensorCombo->currentData().toInt();
-    if (sensorIndex >= 0)
-        sql += " AND sensor_index=?";
-    sql += " ORDER BY sample_time ASC LIMIT 10000";
-    query.prepare(sql);
-    query.addBindValue(m_startEdit->dateTime().toString(Qt::ISODateWithMs));
-    query.addBindValue(m_endEdit->dateTime().toString(Qt::ISODateWithMs));
-    if (sensorIndex >= 0)
-        query.addBindValue(sensorIndex);
-    if (!query.exec()) {
-        QMessageBox::critical(this, "查询失败", query.lastError().text());
-        return;
-    }
+    m_requestedSensor = m_sensorCombo->currentData().toInt();
+    if (!m_query->run(HistoryQuery::Samples,
+                     m_startEdit->dateTime().toString(Qt::ISODateWithMs),
+                     m_endEdit->dateTime().toString(Qt::ISODateWithMs), m_requestedSensor, m_offset)) return;
+    m_queryButton->setEnabled(false); m_previous->setEnabled(false); m_next->setEnabled(false);
+    m_startEdit->setEnabled(false); m_endEdit->setEnabled(false); m_sensorCombo->setEnabled(false);
+    m_pageLabel->setText("正在查询…");
+}
+
+void HistoryDialog::showRows(const QVariantList &rows)
+{
+    const int sensorIndex = m_requestedSensor;
     m_table->setRowCount(0);
     QVector<double> timeValues[4];
     QVector<double> temperatures[4];
     QVector<double> humidities[4];
-    while (query.next()) {
+    for (const auto &entry : rows) {
+        const auto fields = entry.toList();
         const int row = m_table->rowCount();
         m_table->insertRow(row);
-        const QDateTime time = QDateTime::fromString(query.value(0).toString(), Qt::ISODateWithMs);
+        const QDateTime time = QDateTime::fromString(fields.at(0).toString(), Qt::ISODateWithMs);
         m_table->setItem(row, 0, new QTableWidgetItem(time.toString("yyyy-MM-dd HH:mm:ss")));
         for (int column = 1; column < 5; ++column)
-            m_table->setItem(row, column, new QTableWidgetItem(query.value(column).toString()));
-        const int rowSensorIndex = query.value(5).toInt();
+            m_table->setItem(row, column, new QTableWidgetItem(fields.at(column).toString()));
+        const int rowSensorIndex = fields.at(5).toInt();
         if (rowSensorIndex < 0 || rowSensorIndex >= 4)
             continue;
         timeValues[rowSensorIndex].append(time.toMSecsSinceEpoch() / 1000.0);
-        temperatures[rowSensorIndex].append(query.value(3).toDouble());
-        humidities[rowSensorIndex].append(query.value(4).toDouble());
+        temperatures[rowSensorIndex].append(fields.at(3).toDouble());
+        humidities[rowSensorIndex].append(fields.at(4).toDouble());
     }
 
     bool hasAnyData = false;

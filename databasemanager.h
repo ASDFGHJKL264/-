@@ -9,7 +9,7 @@ class QDateTime;
 class DatabaseManager
 {
 public:
-    DatabaseManager();
+    explicit DatabaseManager(const QString &path = {});
     ~DatabaseManager();
 
     bool initialize(QString *errorMessage = nullptr);
@@ -27,6 +27,7 @@ private:
     bool executeSchema(QString *errorMessage);
 
     QString m_connectionName;
+    QString m_path;
     QSqlDatabase m_database;
 };
 

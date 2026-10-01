@@ -8,6 +8,9 @@
 #include <QJsonArray>
 #include <QUuid>
 #include <QSet>
+#include <QElapsedTimer>
+#include <QScopeGuard>
+#include <QThread>
 #include <chrono>
 #include <cmath>
 
@@ -123,6 +126,7 @@ bool MonitorService::commitTransaction()
 
 void MonitorService::initialize(const QString &path, const QVariantList &defaults)
 {
+    Q_ASSERT(QThread::currentThread() == thread());
     m_lock = std::make_unique<QLockFile>(path + ".monitor.lock");
     m_lock->setStaleLockTime(0);
     if (!m_lock->tryLock()) {
@@ -140,8 +144,11 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
         emit initialized(false);
         return;
     }
-    execute("PRAGMA journal_mode=WAL");
-    execute("PRAGMA foreign_keys=ON");
+    if (!execute("PRAGMA journal_mode=WAL") || !execute("PRAGMA foreign_keys=ON")) {
+        fail("数据库参数初始化失败");
+        emit initialized(false);
+        return;
+    }
     const QStringList schema = {
         "CREATE TABLE IF NOT EXISTS monitor_rules(zone INTEGER PRIMARY KEY,config TEXT NOT NULL)",
         "CREATE TABLE IF NOT EXISTS monitor_tasks(id INTEGER PRIMARY KEY,name TEXT NOT NULL,started_at TEXT NOT NULL,ended_at TEXT,status TEXT NOT NULL,simulator INTEGER NOT NULL,interval_ms INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL DEFAULT 0)",
@@ -258,6 +265,12 @@ void MonitorService::configure(const QVariantList &rules)
 
 void MonitorService::session(bool active, bool simulator)
 {
+    if (!m_ready) { if (active) emit sessionRejected(); return; }
+    if (active && m_taskId && simulator != m_simulator) {
+        emit logMessage("运行中任务不允许切换数据来源", true);
+        emit sessionRejected();
+        return;
+    }
     if (active) {
         // Do not let simulated samples recover hardware incidents (or vice versa).
         auto open = rows(
@@ -265,13 +278,15 @@ void MonitorService::session(bool active, bool simulator)
             {simulator});
         if (!open.isEmpty()) {
             emit logMessage(
-                "存在另一数据源的未恢复报警，本次仅采集，不执行区域业务。请切回原数据源。", true);
+                "存在另一数据源的未恢复报警，采集已拒绝。请切回原数据源。", true);
             m_acquiring = false;
+            emit sessionRejected();
             return;
         }
     }
     m_acquiring = active;
-    m_simulator = simulator;
+    // A rejected start/stop must not relabel an existing task's data source.
+    if (active) m_simulator = simulator;
     if (!active)
         for (int i = 0; i < 4; ++i)
             lost(i);
@@ -291,13 +306,14 @@ void MonitorService::lost(int zone)
 void MonitorService::sample(int zone, const QString &name, int slave, double t, double h,
                             qint64 mono, const QString &wall)
 {
-    struct Done {
-        MonitorService *s;
-        ~Done()
-        {
-            emit s->sampleProcessed();
-        }
-    } done{this};
+    Q_ASSERT(QThread::currentThread() == thread());
+    QElapsedTimer elapsed;
+    elapsed.start();
+    bool saved = false;
+    const auto completion = qScopeGuard([&] {
+        emit sampleProcessed();
+        emit sampleStored(saved, elapsed.elapsed());
+    });
     if (!m_ready || zone < 0 || zone >= 4)
         return;
     if (!std::isfinite(t) || !std::isfinite(h) || t < -100 || t > 200 || h < 0 || h > 100) {
@@ -305,7 +321,8 @@ void MonitorService::sample(int zone, const QString &name, int slave, double t, 
         emit logMessage("收到无效温湿度数据，未入库", true);
         return;
     }
-    if (!m_acquiring || monotonicMs() - mono > m_zones[zone].rule.staleMs) {
+    if (!m_acquiring || mono > monotonicMs() || mono < m_zones[zone].lastSample
+        || monotonicMs() - mono > m_zones[zone].rule.staleMs) {
         lost(zone);
         return;
     }
@@ -313,7 +330,7 @@ void MonitorService::sample(int zone, const QString &name, int slave, double t, 
     auto oldStats = m_stats;
     auto ids = m_alarmIds;
     auto transitions = m_zones[zone].sample(mono, t, h);
-    if (m_taskId && m_taskZones.contains(zone))
+    if (m_taskId && m_taskZones.contains(zone) && mono >= m_started)
         m_stats[zone].observe(qMax<qint64>(0, mono - m_started), m_interval, m_zones[zone].rule, t,
                               h);
     if (!beginTransaction()) {
@@ -321,6 +338,7 @@ void MonitorService::sample(int zone, const QString &name, int slave, double t, 
         m_stats = oldStats;
         m_error = m_db.lastError().text();
         fail("存储繁忙，样本未保存");
+        lost(zone); // failed persistence also breaks pending/recovery continuity
         return;
     }
     bool ok = execute(
@@ -366,6 +384,8 @@ void MonitorService::sample(int zone, const QString &name, int slave, double t, 
         lost(zone);
         return;
     }
+    saved = true;
+    emit statusReady(zone, m_zones[zone].rule.name, m_zones[zone].status());
     for (const auto &c : transitions)
         emit logMessage(QString("【%1】%2 %3")
                             .arg(c.kind == AlarmTransition::Raised ? "报警发生" : "报警恢复",
@@ -553,6 +573,7 @@ void MonitorService::report(qint64 id)
 }
 void MonitorService::shutdown()
 {
+    Q_ASSERT(QThread::currentThread() == thread());
     if (m_timer)
         m_timer->stop();
     if (m_ready)

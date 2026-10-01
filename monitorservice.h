@@ -35,6 +35,8 @@ class MonitorService final : public QObject
     void taskChanged(bool active, const QString &name);
     void logMessage(const QString &text, bool warning);
     void sampleProcessed();
+    void sampleStored(bool saved, qint64 elapsedMs);
+    void sessionRejected();
     void reportReady(const QString &csv);
     void initialized(bool ok);
     void configurationLocked(bool locked);

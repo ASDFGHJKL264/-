@@ -6,11 +6,68 @@
 #include <QThread>
 #include <QPointer>
 #include <limits>
+#include "databasemanager.h"
 
 class MonitorBusinessTest : public QObject
 {
     Q_OBJECT
   private slots:
+    void transactionRollbackAndLockRecovery()
+    {
+        QTemporaryDir dir;
+        const auto path = dir.filePath("rollback.db");
+        {
+            DatabaseManager schema(path); QString error;
+            QVERIFY(schema.initialize(&error));
+        }
+        auto db = QSqlDatabase::addDatabase("QSQLITE", "rollback-inspector");
+        db.setDatabaseName(path); QVERIFY(db.open());
+        QVariantList defaults;
+        for (int i = 0; i < 4; ++i) {
+            ZoneRule r; r.name = QString::number(i); r.holdMs = 0;
+            defaults.append(MonitorService::encodeRule(r));
+        }
+        MonitorService service;
+        service.initialize(path, defaults);
+        service.session(true, true);
+        service.startTask("rollback", {0}, 100);
+        QSignalSpy completed(&service, &MonitorService::sampleStored);
+        const auto send = [&] {
+            service.sample(0, "sensor", 1, 80, 50, MonitorService::monotonicMs(),
+                           QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+        };
+        {
+            QSqlQuery q(db);
+            QVERIFY(q.exec("CREATE TRIGGER reject_alarm BEFORE INSERT ON monitor_alarms BEGIN SELECT RAISE(ABORT,'injected'); END"));
+            send(); QVERIFY(!completed.last()[0].toBool());
+            QVERIFY(q.exec("SELECT COUNT(*) FROM sensor_history")); QVERIFY(q.next());
+            QCOMPARE(q.value(0).toInt(), 0); q.finish();
+            QVERIFY(q.exec("SELECT samples FROM monitor_task_zones")); QVERIFY(q.next());
+            QCOMPARE(q.value(0).toInt(), 0); q.finish();
+            QVERIFY(q.exec("DROP TRIGGER reject_alarm"));
+            QVERIFY(q.exec("BEGIN IMMEDIATE"));
+            QElapsedTimer elapsed; elapsed.start();
+            send(); QVERIFY(!completed.last()[0].toBool());
+            QVERIFY(elapsed.elapsed() < 1500);
+            QVERIFY(q.exec("ROLLBACK"));
+            send(); QVERIFY(completed.last()[0].toBool());
+            QVERIFY(q.exec("SELECT COUNT(*) FROM monitor_alarms")); QVERIFY(q.next());
+            QCOMPARE(q.value(0).toInt(), 1); q.finish();
+            QVERIFY(q.exec("SELECT samples FROM monitor_task_zones")); QVERIFY(q.next());
+            QCOMPARE(q.value(0).toInt(), 1);
+        }
+        service.session(false, true);
+        QSignalSpy rejected(&service, &MonitorService::sessionRejected);
+        service.session(true, false);
+        QCOMPARE(rejected.size(), 1);
+        service.session(false, false); // rejected source must not change task identity
+        service.session(true, false);
+        QCOMPARE(rejected.size(), 2);
+        service.session(true, true);
+        QCOMPARE(rejected.size(), 2);
+        service.shutdown();
+        db.close(); db = {}; QSqlDatabase::removeDatabase("rollback-inspector");
+    }
     void delayAndRecovery()
     {
         ZoneMonitor z;

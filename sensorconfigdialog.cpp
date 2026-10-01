@@ -1,6 +1,6 @@
 #include "sensorconfigdialog.h"
 
-#include "mainwindow.h"
+#include "appconfig.h"
 
 #include <QCheckBox>
 #include <QComboBox>

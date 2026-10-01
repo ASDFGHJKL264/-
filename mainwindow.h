@@ -2,53 +2,29 @@
 #define MAINWINDOW_H
 
 #include "qcustomplot.h"
-#include "databasemanager.h"
+#include "appconfig.h"
 
 #include <QComboBox>
 #include <QDateTime>
 #include <QFile>
 #include <QLineEdit>
 #include <QMainWindow>
-#include <QModbusRtuSerialClient>
 #include <QPushButton>
 #include <QTextEdit>
 #include <QTimer>
 
-struct SensorConfig {
-    bool enabled = false;
-    QString name;
-    int slaveId = 1;
-    bool useInputRegisters = false;
-    int temperatureRegister = 0;
-    int humidityRegister = 1;
-};
-
 class MonitorService;
-class QThread;
+class MonitoringController;
+class AsyncLogger;
 class QGroupBox;
 class MonitorDialog;
-
-struct AppConfig {
-    QString port = "COM1";
-    int baud = 9600;
-    int dataBits = 8;
-    QString parity = "无校验";
-    int stopBits = 1;
-    int pollIntervalMs = 500;
-    bool simulatorEnabled = false;
-    double temperatureMin = -20.0;
-    double temperatureMax = 60.0;
-    double humidityMin = 10.0;
-    double humidityMax = 90.0;
-    SensorConfig sensors[4];
-};
 
 class MainWindow final : public QMainWindow
 {
     Q_OBJECT
 
   public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr, const QString &dataDirectory = {});
     ~MainWindow() override;
 
   private:
@@ -59,22 +35,15 @@ class MainWindow final : public QMainWindow
     void saveConfig();
     void applyConfigToUi();
     void toggleConnect();
-    void pollNextSensor();
-    void requestSensor(int index);
     void handleSample(int index, double temperature, double humidity);
     void updatePlot(int index, double temperature, double humidity);
-    void scheduleNextPoll(int delayMs = -1);
     void printLog(const QString &message, bool warning = false);
-    void rotateLogIfNeeded();
-    void initializeDatabase();
     void initializeDataMenus();
     void showSensorConfigDialog();
     void initializeMonitoring();
     void showMonitoring();
     void stopAcquisition();
     QString configFilePath() const;
-    QString logDirectoryPath() const;
-    int nextEnabledSensor(int after) const;
     bool validateConfig(QString *errorMessage) const;
 
     QComboBox *m_cbxPort = nullptr;
@@ -90,24 +59,17 @@ class MainWindow final : public QMainWindow
     QTextEdit *m_txtLog = nullptr;
     QCustomPlot *m_plot = nullptr;
 
-    QModbusRtuSerialClient *m_modbusClient = nullptr;
-    QTimer *m_pollTimer = nullptr;
     QTimer *m_plotRefreshTimer = nullptr;
     AppConfig m_config;
-    int m_currentSensor = -1;
-    bool m_requestPending = false;
+    QString m_dataDirectory;
+    MonitoringController *m_controller = nullptr;
+    AsyncLogger *m_logger = nullptr;
     bool m_plotPaused = false;
     qint64 m_sampleSequence = 0;
-    QDateTime m_lastAlarm[4][2];
-    DatabaseManager m_database;
-    bool m_databaseAvailable = false;
     MonitorService *m_monitor = nullptr;
-    QThread *m_monitorThread = nullptr;
     QGroupBox *m_sensorBoxes[4]{};
     QPointer<MonitorDialog> m_monitorDialog;
     bool m_monitorReady = false, m_taskActive = false, m_collecting = false;
-    int m_queuedSamples = 0;
-    quint64 m_acquisitionGeneration = 0;
     bool m_businessLocked = false;
 };
 

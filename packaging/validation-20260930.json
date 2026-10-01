@@ -1,0 +1,21 @@
+{
+  "date": "2026-09-30",
+  "version": "2026.09.30",
+  "checks": [
+    {
+      "Product": "温湿度数据采集系统",
+      "Executable": "温湿度数据采集系统.exe",
+      "CleanInstall": true,
+      "Update": true,
+      "ConfigPreserved": true,
+      "DataPreserved": true,
+      "Backup": true,
+      "StartupWithoutQtPath": true,
+      "CleanExit": true
+    }
+  ],
+  "automatedTestTargetsPassed": 5,
+  "lifecycleCycles": 100,
+  "existingFilesPreservedOnUpgrade": 3,
+  "hardwareAcceptancePerformed": false
+}

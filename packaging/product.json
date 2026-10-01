@@ -1,0 +1,9 @@
+{
+  "name": "温湿度数据采集系统",
+  "version": "2026.09.30",
+  "installDirectory": "D:\\温湿度数据采集系统",
+  "applications": [
+    {"source": ".", "target": "Qwenshiducaiji", "executable": "温湿度数据采集系统.exe", "shortcut": "温湿度数据采集系统"}
+  ],
+  "documents": ["BUSINESS_GUIDE.md", "QUALITY_VALIDATION.md", "config.example.ini", "RELEASE.md"]
+}

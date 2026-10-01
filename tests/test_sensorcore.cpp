@@ -1,5 +1,7 @@
 #include "sensorutils.h"
 #include "serialportpolicy.h"
+#include "appconfig.h"
+#include <limits>
 
 #include <QSettings>
 #include <QTemporaryDir>
@@ -75,20 +77,17 @@ void SensorCoreTest::configReadWrite()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString path = directory.filePath("config.ini");
-    {
-        QSettings writer(path, QSettings::IniFormat);
-        writer.setValue("Serial/port", "COM8");
-        writer.setValue("Serial/baud", 19200);
-        writer.setValue("Sensor2/enabled", true);
-        writer.setValue("Sensor2/slaveId", 7);
-        writer.sync();
-        QCOMPARE(writer.status(), QSettings::NoError);
-    }
-    QSettings reader(path, QSettings::IniFormat);
-    QCOMPARE(reader.value("Serial/port").toString(), QString("COM8"));
-    QCOMPARE(reader.value("Serial/baud").toInt(), 19200);
-    QCOMPARE(reader.value("Sensor2/enabled").toBool(), true);
-    QCOMPARE(reader.value("Sensor2/slaveId").toInt(), 7);
+    auto config = ConfigStore::load(path);
+    config.port = "COM8"; config.baud = 19200;
+    config.sensors[1].enabled = true; config.sensors[1].slaveId = 7;
+    QString error;
+    QVERIFY(ConfigStore::save(path, config, &error));
+    const auto read = ConfigStore::load(path);
+    QCOMPARE(read.port, QString("COM8")); QCOMPARE(read.baud, 19200);
+    QVERIFY(read.sensors[1].enabled); QCOMPARE(read.sensors[1].slaveId, 7);
+    config.sensors[1].slaveId = config.sensors[0].slaveId;
+    QVERIFY(!ConfigStore::save(path, config, &error));
+    QCOMPARE(ConfigStore::load(path).sensors[1].slaveId, 7);
 }
 
 void SensorCoreTest::configDefaultsAndClamping()
@@ -96,10 +95,15 @@ void SensorCoreTest::configDefaultsAndClamping()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QSettings settings(directory.filePath("missing.ini"), QSettings::IniFormat);
-    QCOMPARE(settings.value("Serial/port", "COM1").toString(), QString("COM1"));
-    QCOMPARE(qBound(100, settings.value("Acquisition/intervalMs", 500).toInt(), 60000), 500);
+    QCOMPARE(ConfigStore::load(settings.fileName()).port, QString("COM1"));
+    QCOMPARE(ConfigStore::load(settings.fileName()).pollIntervalMs, 500);
     settings.setValue("Acquisition/intervalMs", 10);
-    QCOMPARE(qBound(100, settings.value("Acquisition/intervalMs", 500).toInt(), 60000), 100);
+    settings.sync();
+    auto config = ConfigStore::load(settings.fileName());
+    QCOMPARE(config.pollIntervalMs, 100);
+    QString error;
+    config.temperatureMin = std::numeric_limits<double>::quiet_NaN();
+    QVERIFY(!ConfigStore::validate(config, &error));
 }
 
 void SensorCoreTest::alarmThreshold_data()

@@ -1,14 +1,15 @@
 #include "databasemanager.h"
 
-#include <QApplication>
+#include <QCoreApplication>
+#include <QFileInfo>
 #include <QDateTime>
 #include <QDir>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
 
-DatabaseManager::DatabaseManager()
-    : m_connectionName("environment-monitor-" + QUuid::createUuid().toString(QUuid::WithoutBraces))
+DatabaseManager::DatabaseManager(const QString &path)
+    : m_connectionName("environment-monitor-" + QUuid::createUuid().toString(QUuid::WithoutBraces)), m_path(path)
 {
 }
 
@@ -22,7 +23,7 @@ DatabaseManager::~DatabaseManager()
 
 QString DatabaseManager::databasePath() const
 {
-    return QApplication::applicationDirPath() + "/data/environment.db";
+    return m_path.isEmpty() ? QCoreApplication::applicationDirPath() + "/data/environment.db" : m_path;
 }
 
 QString DatabaseManager::connectionName() const
@@ -32,9 +33,10 @@ QString DatabaseManager::connectionName() const
 
 bool DatabaseManager::initialize(QString *errorMessage)
 {
-    QDir().mkpath(QApplication::applicationDirPath() + "/data");
+    QDir().mkpath(QFileInfo(databasePath()).absolutePath());
     m_database = QSqlDatabase::addDatabase("QSQLITE", m_connectionName);
     m_database.setDatabaseName(databasePath());
+    m_database.setConnectOptions("QSQLITE_BUSY_TIMEOUT=250");
     if (!m_database.open()) {
         if (errorMessage)
             *errorMessage = m_database.lastError().text();
@@ -43,7 +45,7 @@ bool DatabaseManager::initialize(QString *errorMessage)
     QSqlQuery pragma(m_database);
     pragma.exec("PRAGMA journal_mode=WAL");
     pragma.exec("PRAGMA synchronous=NORMAL");
-    pragma.exec("PRAGMA busy_timeout=3000");
+    pragma.exec("PRAGMA busy_timeout=250");
     return executeSchema(errorMessage);
 }
 
