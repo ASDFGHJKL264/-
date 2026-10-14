@@ -5,6 +5,8 @@
 #include <QSqlQuery>
 #include <QThread>
 #include <QPointer>
+#include <QJsonDocument>
+#include <QSet>
 #include <limits>
 #include "databasemanager.h"
 
@@ -12,6 +14,153 @@ class MonitorBusinessTest : public QObject
 {
     Q_OBJECT
   private slots:
+    void oldRecordsRemainReachableWithBoundedPages()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto path = dir.filePath("record-pages.db");
+        {
+            DatabaseManager schema(path);
+            QString error;
+            QVERIFY2(schema.initialize(&error), qPrintable(error));
+        }
+        QVariantList defaults;
+        for (int i = 0; i < 4; ++i) {
+            ZoneRule rule;
+            rule.name = QString("区域%1").arg(i + 1);
+            defaults.append(MonitorService::encodeRule(rule));
+        }
+        MonitorService service;
+        service.initialize(path, defaults);
+        QSignalSpy views(&service, &MonitorService::viewReady);
+        QSignalSpy reports(&service, &MonitorService::reportReady);
+        auto db = QSqlDatabase::addDatabase("QSQLITE", "record-page-inspector");
+        db.setDatabaseName(path);
+        QVERIFY(db.open());
+        {
+            QSqlQuery q(db);
+            QVERIFY(db.transaction());
+            QVERIFY(q.prepare(
+                "INSERT INTO monitor_alarms(id,zone,name,metric,direction,value,minimum,maximum,raised_at,ack_at,recovered_at,simulator) VALUES(?,0,'old zone',0,1,80,-20,60,'raised',?, ?,0)"));
+            for (int id = 1; id <= 621; ++id) {
+                q.bindValue(0, id);
+                q.bindValue(1, id <= 102 ? QVariant() : QVariant("acknowledged"));
+                q.bindValue(2, id == 1 ? QVariant() : QVariant("recovered"));
+                QVERIFY(q.exec());
+            }
+            QVERIFY(q.prepare(
+                "INSERT INTO monitor_tasks(id,name,started_at,ended_at,status,simulator,interval_ms,elapsed_ms) VALUES(?,?,'started','ended','completed',0,500,1000)"));
+            for (int id = 1; id <= 250; ++id) {
+                q.bindValue(0, id);
+                q.bindValue(1, QString("task-%1").arg(id));
+                QVERIFY(q.exec());
+            }
+            QVERIFY(q.prepare("INSERT INTO monitor_task_zones(task_id,zone,config) VALUES(1,0,?)"));
+            q.addBindValue(QString::fromUtf8(QJsonDocument::fromVariant(defaults.first()).toJson(
+                QJsonDocument::Compact)));
+            QVERIFY(q.exec());
+            QVERIFY(db.commit());
+        }
+        service.reloadRecords();
+        auto view = views.last()[0].toMap();
+        QCOMPARE(view["alarms"].toList().size(), 101);
+        QCOMPARE(view["alarms"].toList().first().toMap()["id"].toInt(), 1);
+        QCOMPARE(view["alarmPage"].toMap()["pinned"].toInt(), 1);
+        QCOMPARE(view["tasks"].toList().size(), 100);
+        QCOMPARE(view["tasks"].toList().first().toMap()["id"].toInt(), 250);
+        {
+            // Inserts after the snapshot must not shift deeper pages or repeat old rows.
+            QSqlQuery q(db);
+            QVERIFY(q.exec("INSERT INTO monitor_alarms(id,zone,name,metric,direction,value,minimum,maximum,raised_at,ack_at,recovered_at,simulator) VALUES(622,0,'new',0,1,80,-20,60,'raised','ack','recovered',0)"));
+            QVERIFY(q.exec("INSERT INTO monitor_tasks(id,name,started_at,ended_at,status,simulator,interval_ms) VALUES(251,'new task','started','ended','completed',0,500)"));
+        }
+        QSet<qint64> historicalIds;
+        int alarmPages = 0;
+        for (;;) {
+            view = views.last()[0].toMap();
+            const auto alarms = view["alarms"].toList();
+            QVERIFY(alarms.size() <= 108);
+            QCOMPARE(alarms.first().toMap()["id"].toInt(), 1);
+            for (const auto &item : alarms) {
+                const auto id = item.toMap()["id"].toLongLong();
+                if (id == 1)
+                    continue;
+                QVERIFY(!historicalIds.contains(id));
+                QVERIFY(id <= 621);
+                historicalIds.insert(id);
+            }
+            ++alarmPages;
+            if (!view["alarmPage"].toMap()["hasMore"].toBool())
+                break;
+            QVERIFY(alarmPages < 10);
+            service.browseAlarms(1);
+        }
+        QCOMPARE(alarmPages, 7);
+        QCOMPARE(historicalIds.size(), 620);
+        QVERIFY(historicalIds.contains(2));
+        service.browseAlarms(-1);
+        QCOMPARE(views.last()[0].toMap()["alarmPage"].toMap()["number"].toInt(), 6);
+        service.browseAlarms(0, 1);
+        view = views.last()[0].toMap();
+        QCOMPARE(view["alarms"].toList().size(), 1);
+        QVERIFY(!view["alarmPage"].toMap()["hasMore"].toBool());
+        service.browseAlarms(0, 2);
+        QCOMPARE(views.last()[0].toMap()["alarms"].toList().size(), 101);
+        service.browseAlarms(1);
+        QCOMPARE(views.last()[0].toMap()["alarms"].toList().size(), 2);
+        service.acknowledge(2, "operator", "old recovered incident checked");
+        QCOMPARE(views.last()[0].toMap()["alarms"].toList().size(), 1);
+        service.acknowledge(1, "operator", "old active incident checked");
+        QVERIFY(views.last()[0].toMap()["alarms"].toList().isEmpty());
+        QVERIFY(views.last()[0].toMap()["alarmPage"].toMap()["hasPrevious"].toBool());
+        service.browseAlarms(-1);
+        QCOMPARE(views.last()[0].toMap()["alarms"].toList().size(), 100);
+        service.browseAlarms(0, 1);
+        QCOMPARE(views.last()[0].toMap()["alarms"].toList().first().toMap()["id"].toInt(), 1);
+        {
+            QSqlQuery q(db);
+            QVERIFY(q.exec("UPDATE monitor_alarms SET recovered_at='recovered' WHERE id=1"));
+        }
+        service.refresh();
+        QVERIFY(views.last()[0].toMap()["alarms"].toList().isEmpty());
+        service.browseAlarms(0, 3);
+        QCOMPARE(views.last()[0].toMap()["alarms"].toList().size(), 100);
+
+        QSet<qint64> taskIds;
+        int taskPages = 0;
+        for (;;) {
+            view = views.last()[0].toMap();
+            const auto tasks = view["tasks"].toList();
+            QVERIFY(tasks.size() <= 100);
+            for (const auto &item : tasks) {
+                const auto id = item.toMap()["id"].toLongLong();
+                QVERIFY(!taskIds.contains(id));
+                QVERIFY(id <= 250);
+                taskIds.insert(id);
+            }
+            ++taskPages;
+            if (!view["taskPage"].toMap()["hasMore"].toBool())
+                break;
+            QVERIFY(taskPages < 5);
+            service.browseTasks(1);
+        }
+        QCOMPARE(taskPages, 3);
+        QCOMPARE(taskIds.size(), 250);
+        QVERIFY(taskIds.contains(1));
+        service.report(1);
+        QCOMPARE(reports.size(), 1);
+        QVERIFY(reports.last()[0].toString().contains("task-1"));
+        service.browseTasks(-1);
+        QCOMPARE(views.last()[0].toMap()["taskPage"].toMap()["number"].toInt(), 2);
+        service.browseTasks(-1);
+        QCOMPARE(views.last()[0].toMap()["tasks"].toList().first().toMap()["id"].toInt(), 250);
+        service.reloadRecords();
+        QCOMPARE(views.last()[0].toMap()["tasks"].toList().first().toMap()["id"].toInt(), 251);
+        service.shutdown();
+        db.close();
+        db = {};
+        QSqlDatabase::removeDatabase("record-page-inspector");
+    }
     void transactionRollbackAndLockRecovery()
     {
         QTemporaryDir dir;

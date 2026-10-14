@@ -28,15 +28,19 @@ class MainWindow final : public QMainWindow
     ~MainWindow() override;
 
   private:
+    friend class WindowLifecycleTests;
     void initUI();
     void initSerialParameters();
     void refreshPortList();
     void loadConfig();
-    void saveConfig();
+    bool saveConfig();
+    AppConfig configWithSerialUi(AppConfig candidate) const;
+    bool commitConfig(const AppConfig &candidate);
     void applyConfigToUi();
     void toggleConnect();
     void handleSample(int index, double temperature, double humidity);
     void updatePlot(int index, double temperature, double humidity);
+    void updatePlotRange();
     void printLog(const QString &message, bool warning = false);
     void initializeDataMenus();
     void showSensorConfigDialog();
@@ -44,7 +48,6 @@ class MainWindow final : public QMainWindow
     void showMonitoring();
     void stopAcquisition();
     QString configFilePath() const;
-    bool validateConfig(QString *errorMessage) const;
 
     QComboBox *m_cbxPort = nullptr;
     QComboBox *m_cbxBaud = nullptr;

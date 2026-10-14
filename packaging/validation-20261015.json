@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-15",
+  "version": "2026.10.15",
+  "command": "scripts/verify.ps1 -LifecycleCycles 100",
+  "targets": 5,
+  "result": "passed",
+  "ctestSeconds": 30.54,
+  "qtTestPassedEntries": [
+    17,
+    11,
+    4,
+    8,
+    6
+  ],
+  "entryCountIncludesInitCleanupAndDataRows": true,
+  "lifecycle": {
+    "cycles": 100,
+    "saved": 529,
+    "maximumCloseMs": 37
+  },
+  "limitations": [
+    "simulator and temporary data only",
+    "not a latency or hardware benchmark",
+    "no 24-hour aging",
+    "normal I/O close timing is not a hard deadline"
+  ]
+}

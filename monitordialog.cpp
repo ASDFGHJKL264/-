@@ -5,6 +5,7 @@
 #include <QLineEdit>
 #include <QLabel>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -14,6 +15,7 @@
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QSaveFile>
+#include <QSignalBlocker>
 
 namespace
 {
@@ -26,6 +28,21 @@ QTableWidget *table(const QStringList &headers)
     t->setSelectionMode(QAbstractItemView::SingleSelection);
     t->setEditTriggers(QAbstractItemView::NoEditTriggers);
     return t;
+}
+QString selectedId(QTableWidget *table)
+{
+    const int row = table->currentRow();
+    return row >= 0 && table->item(row, 0) ? table->item(row, 0)->text() : QString();
+}
+void restoreSelection(QTableWidget *table, const QString &id)
+{
+    if (id.isEmpty())
+        return;
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (table->item(row, 0)->text() == id) {
+            table->selectRow(row);
+            break;
+        }
 }
 } // namespace
 MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled, int interval,
@@ -94,10 +111,45 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
     tabs->addTab(rulesPage, "区域规则");
     auto *alarmPage = new QWidget;
     auto *alarmLayout = new QVBoxLayout(alarmPage);
-    alarmLayout->addWidget(new QLabel(
-        "最新500条业务报警；确认和恢复相互独立。旧版报警仍在原“报警记录”窗口，不会伪造历史确认/恢复状态。"));
+    auto *alarmHint = new QLabel(
+        "未恢复报警固定置顶（翻页时仍显示）；历史每页最多100条。待确认筛选可查找旧记录，确认和恢复相互独立。新增历史请点首页或刷新。旧版报警仍在原“报警记录”窗口。");
+    alarmHint->setWordWrap(true);
+    alarmLayout->addWidget(alarmHint);
+    auto *alarmNavigation = new QHBoxLayout;
+    m_alarmFilter = new QComboBox;
+    m_alarmFilter->setObjectName("alarmRecordFilter");
+    m_alarmFilter->addItems({"全部报警", "未恢复报警", "待确认报警", "已完成报警"});
+    auto *alarmFirst = new QPushButton("首页 / 最新");
+    alarmFirst->setObjectName("alarmFirstPage");
+    m_alarmPrevious = new QPushButton("上一页");
+    m_alarmPrevious->setObjectName("alarmPreviousPage");
+    m_alarmNext = new QPushButton("下一页");
+    m_alarmNext->setObjectName("alarmNextPage");
+    m_alarmPageLabel = new QLabel;
+    m_alarmPageLabel->setObjectName("alarmPageLabel");
+    alarmNavigation->addWidget(m_alarmFilter);
+    alarmNavigation->addWidget(alarmFirst);
+    alarmNavigation->addWidget(m_alarmPrevious);
+    alarmNavigation->addWidget(m_alarmNext);
+    alarmNavigation->addWidget(m_alarmPageLabel);
+    alarmNavigation->addStretch();
+    alarmLayout->addLayout(alarmNavigation);
+    connect(m_alarmFilter, &QComboBox::currentIndexChanged, this, [this](int filter) {
+        QMetaObject::invokeMethod(m_service, [s = m_service, filter] {
+            s->browseAlarms(0, filter);
+        });
+    });
+    for (auto *button : {alarmFirst, m_alarmPrevious, m_alarmNext}) {
+        const int direction = button == alarmFirst ? 0 : button == m_alarmPrevious ? -1 : 1;
+        connect(button, &QPushButton::clicked, this, [this, direction] {
+            QMetaObject::invokeMethod(m_service, [s = m_service, direction] {
+                s->browseAlarms(direction);
+            });
+        });
+    }
     m_alarms = table({"ID", "区域", "类型", "方向", "发生值", "发生UTC", "确认UTC", "恢复UTC",
                       "操作人", "备注", "数据源"});
+    m_alarms->setObjectName("businessAlarmTable");
     alarmLayout->addWidget(m_alarms);
     auto *ack = new QPushButton("确认选中报警并填写处理备注");
     alarmLayout->addWidget(ack);
@@ -139,9 +191,34 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
     taskLayout->addLayout(controls);
     taskLayout->addWidget(new QLabel(
         "任务期间锁定配置；掉线后任务继续，缺失时段不视为正常。导出前先结束任务。采样覆盖按配置间隔分时间槽统计。"));
+    auto *taskNavigation = new QHBoxLayout;
+    auto *taskFirst = new QPushButton("首页 / 最新");
+    taskFirst->setObjectName("taskFirstPage");
+    m_taskPrevious = new QPushButton("上一页");
+    m_taskPrevious->setObjectName("taskPreviousPage");
+    m_taskNext = new QPushButton("下一页");
+    m_taskNext->setObjectName("taskNextPage");
+    m_taskPageLabel = new QLabel;
+    m_taskPageLabel->setObjectName("taskPageLabel");
+    taskNavigation->addWidget(taskFirst);
+    taskNavigation->addWidget(m_taskPrevious);
+    taskNavigation->addWidget(m_taskNext);
+    taskNavigation->addWidget(m_taskPageLabel);
+    taskNavigation->addStretch();
+    taskLayout->addLayout(taskNavigation);
+    for (auto *button : {taskFirst, m_taskPrevious, m_taskNext}) {
+        const int direction = button == taskFirst ? 0 : button == m_taskPrevious ? -1 : 1;
+        connect(button, &QPushButton::clicked, this, [this, direction] {
+            QMetaObject::invokeMethod(m_service, [s = m_service, direction] {
+                s->browseTasks(direction);
+            });
+        });
+    }
     m_tasks = table({"ID", "名称", "开始UTC", "结束UTC", "状态", "数据源", "间隔ms", "持续ms"});
+    m_tasks->setObjectName("businessTaskTable");
     taskLayout->addWidget(m_tasks);
     auto *exportButton = new QPushButton("导出选中任务CSV报告");
+    exportButton->setObjectName("exportTaskReport");
     taskLayout->addWidget(exportButton);
     connect(m_start, &QPushButton::clicked, this, [this] {
         QList<int> zones;
@@ -199,7 +276,7 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
 void MonitorDialog::refresh()
 {
     QMetaObject::invokeMethod(m_service, [s = m_service] {
-        s->refresh();
+        s->reloadRecords();
     });
 }
 void MonitorDialog::updateView(const QVariantMap &v)
@@ -225,6 +302,7 @@ void MonitorDialog::updateView(const QVariantMap &v)
         m_loaded = true;
     }
     auto alarms = v["alarms"].toList();
+    const auto selectedAlarm = selectedId(m_alarms);
     m_alarms->setRowCount(0);
     for (const auto &item : alarms) {
         auto r = item.toMap();
@@ -243,7 +321,21 @@ void MonitorDialog::updateView(const QVariantMap &v)
         m_alarms->insertRow(row);
         for (int c = 0; c < fields.size(); ++c)
             m_alarms->setItem(row, c, new QTableWidgetItem(fields[c]));
+        if (r["recovered_at"].isNull())
+            for (int c = 0; c < fields.size(); ++c)
+                m_alarms->item(row, c)->setBackground(QColor(255, 238, 224));
     }
+    restoreSelection(m_alarms, selectedAlarm);
+    const auto alarmPage = v["alarmPage"].toMap();
+    const QSignalBlocker filterBlocker(m_alarmFilter);
+    m_alarmFilter->setCurrentIndex(alarmPage.value("filter", 0).toInt());
+    m_alarmPrevious->setEnabled(alarmPage["hasPrevious"].toBool());
+    m_alarmNext->setEnabled(alarmPage["hasMore"].toBool());
+    m_alarmPageLabel->setText(QString("第%1页 · 置顶%2条 · 历史%3条")
+                                .arg(alarmPage.value("number", 1).toInt())
+                                .arg(alarmPage["pinned"].toInt())
+                                .arg(alarms.size() - alarmPage["pinned"].toInt()));
+    const auto selectedTask = selectedId(m_tasks);
     m_tasks->setRowCount(0);
     for (const auto &item : v["tasks"].toList()) {
         auto r = item.toMap();
@@ -257,5 +349,12 @@ void MonitorDialog::updateView(const QVariantMap &v)
         for (int c = 0; c < fields.size(); ++c)
             m_tasks->setItem(row, c, new QTableWidgetItem(fields[c]));
     }
+    restoreSelection(m_tasks, selectedTask);
+    const auto taskPage = v["taskPage"].toMap();
+    m_taskPrevious->setEnabled(taskPage["hasPrevious"].toBool());
+    m_taskNext->setEnabled(taskPage["hasMore"].toBool());
+    m_taskPageLabel->setText(QString("第%1页 · %2条任务（每页最多100条）")
+                               .arg(taskPage.value("number", 1).toInt())
+                               .arg(m_tasks->rowCount()));
     m_hint->setText(active ? "当前有运行中的监测任务" : "业务数据已刷新");
 }

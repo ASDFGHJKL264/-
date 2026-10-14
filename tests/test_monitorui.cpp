@@ -8,6 +8,10 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QFontDatabase>
+#include <QComboBox>
+#include <QLabel>
+#include <QJsonDocument>
+#include "databasemanager.h"
 
 class MonitorUiTest : public QObject
 {
@@ -87,6 +91,117 @@ class MonitorUiTest : public QObject
         db.close();
         db = QSqlDatabase();
         QSqlDatabase::removeDatabase("ui-reader");
+    }
+    void historicalPagingFilteringAndOldReport()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto path = dir.filePath("ui-history.db");
+        {
+            DatabaseManager schema(path);
+            QString error;
+            QVERIFY2(schema.initialize(&error), qPrintable(error));
+        }
+        QVariantList defaults;
+        for (int i = 0; i < 4; ++i) {
+            ZoneRule rule;
+            rule.name = QString("区域%1").arg(i + 1);
+            defaults.append(MonitorService::encodeRule(rule));
+        }
+        MonitorService service;
+        service.initialize(path, defaults);
+        auto db = QSqlDatabase::addDatabase("QSQLITE", "ui-history-inspector");
+        db.setDatabaseName(path);
+        QVERIFY(db.open());
+        {
+            QSqlQuery q(db);
+            QVERIFY(db.transaction());
+            QVERIFY(q.prepare("INSERT INTO monitor_alarms(id,zone,name,metric,direction,value,minimum,maximum,raised_at,ack_at,recovered_at,simulator) VALUES(?,0,'old zone',0,1,80,-20,60,'raised',?,?,0)"));
+            for (int id = 1; id <= 552; ++id) {
+                q.bindValue(0, id);
+                q.bindValue(1, id <= 2 ? QVariant() : QVariant("ack"));
+                q.bindValue(2, id == 1 ? QVariant() : QVariant("recovered"));
+                QVERIFY(q.exec());
+            }
+            QVERIFY(q.prepare("INSERT INTO monitor_tasks(id,name,started_at,ended_at,status,simulator,interval_ms,elapsed_ms) VALUES(?,?,'start','end','completed',0,500,1000)"));
+            for (int id = 1; id <= 205; ++id) {
+                q.bindValue(0, id);
+                q.bindValue(1, QString("old-task-%1").arg(id));
+                QVERIFY(q.exec());
+            }
+            QVERIFY(q.prepare("INSERT INTO monitor_task_zones(task_id,zone,config) VALUES(1,0,?)"));
+            q.addBindValue(QString::fromUtf8(QJsonDocument::fromVariant(defaults.first()).toJson(
+                QJsonDocument::Compact)));
+            QVERIFY(q.exec());
+            QVERIFY(db.commit());
+        }
+        {
+            MonitorDialog dialog(&service, {0}, 500);
+            dialog.show();
+            auto *tabs = dialog.findChild<QTabWidget *>();
+            auto *alarms = dialog.findChild<QTableWidget *>("businessAlarmTable");
+            auto *tasks = dialog.findChild<QTableWidget *>("businessTaskTable");
+            auto *alarmNext = dialog.findChild<QPushButton *>("alarmNextPage");
+            auto *alarmPrevious = dialog.findChild<QPushButton *>("alarmPreviousPage");
+            auto *filter = dialog.findChild<QComboBox *>("alarmRecordFilter");
+            auto *taskNext = dialog.findChild<QPushButton *>("taskNextPage");
+            auto *taskPrevious = dialog.findChild<QPushButton *>("taskPreviousPage");
+            auto *taskPage = dialog.findChild<QLabel *>("taskPageLabel");
+            QVERIFY(tabs && alarms && tasks && alarmNext && alarmPrevious && filter && taskNext &&
+                    taskPrevious && taskPage);
+            QTRY_COMPARE(alarms->rowCount(), 101);
+            QCOMPARE(alarms->item(0, 0)->text(), QString("1"));
+            QVERIFY(!alarmPrevious->isEnabled());
+            tabs->setCurrentIndex(1);
+            for (int page = 0; page < 5; ++page) {
+                QVERIFY(alarmNext->isEnabled());
+                QTest::mouseClick(alarmNext, Qt::LeftButton);
+                QTRY_VERIFY(dialog.findChild<QLabel *>("alarmPageLabel")->text().startsWith(
+                    QString("第%1页").arg(page + 2)));
+                QCOMPARE(alarms->item(0, 0)->text(), QString("1"));
+                QVERIFY(alarms->rowCount() <= 108);
+            }
+            QVERIFY(!alarmNext->isEnabled());
+            QCOMPARE(alarms->item(alarms->rowCount() - 1, 0)->text(), QString("2"));
+            filter->setCurrentIndex(2);
+            QTRY_COMPARE(alarms->rowCount(), 2);
+            alarms->selectRow(1);
+            service.refresh();
+            QCOMPARE(alarms->item(alarms->currentRow(), 0)->text(), QString("2"));
+            service.acknowledge(2, "operator", "old incident reviewed");
+            QTRY_COMPARE(alarms->rowCount(), 1);
+            QCOMPARE(alarms->item(0, 0)->text(), QString("1"));
+
+            tabs->setCurrentIndex(2);
+            QTRY_COMPARE(tasks->rowCount(), 100);
+            QTest::mouseClick(taskNext, Qt::LeftButton);
+            QTRY_VERIFY(taskPage->text().startsWith("第2页"));
+            QTest::mouseClick(taskNext, Qt::LeftButton);
+            QTRY_COMPARE(tasks->rowCount(), 5);
+            QVERIFY(!taskNext->isEnabled());
+            QVERIFY(taskPrevious->isEnabled());
+            tasks->selectRow(4);
+            QCOMPARE(tasks->item(tasks->currentRow(), 0)->text(), QString("1"));
+            service.refresh();
+            QCOMPARE(tasks->item(tasks->currentRow(), 0)->text(), QString("1"));
+            // Test the actual export click without opening a file dialog or writing user files.
+            QObject::disconnect(&service, SIGNAL(reportReady(QString)), &dialog, nullptr);
+            QSignalSpy reports(&service, &MonitorService::reportReady);
+            QTest::mouseClick(dialog.findChild<QPushButton *>("exportTaskReport"), Qt::LeftButton);
+            QTRY_COMPARE(reports.size(), 1);
+            QVERIFY(reports.last()[0].toString().contains("old-task-1"));
+            service.session(true, false);
+            service.startTask("new running task", {0}, 500);
+            QTRY_VERIFY(taskPage->text().startsWith("第1页"));
+            QCOMPARE(tasks->item(0, 0)->text(), QString("206"));
+            QCOMPARE(tasks->item(0, 4)->text(), QString("running"));
+            service.finishTask();
+            QTRY_COMPARE(tasks->item(0, 4)->text(), QString("completed"));
+        }
+        service.shutdown();
+        db.close();
+        db = {};
+        QSqlDatabase::removeDatabase("ui-history-inspector");
     }
 };
 QTEST_MAIN(MonitorUiTest)

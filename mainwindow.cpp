@@ -113,8 +113,11 @@ void MainWindow::showSensorConfigDialog()
     if (dialog.exec() != QDialog::Accepted)
         return;
 
-    dialog.applyTo(m_config);
-    saveConfig();
+    auto candidate = m_config;
+    dialog.applyTo(candidate);
+    candidate = configWithSerialUi(candidate);
+    if (!commitConfig(candidate))
+        return;
     refreshPortList();
     if (m_monitorDialog)
         m_monitorDialog->close();
@@ -307,39 +310,50 @@ void MainWindow::applyConfigToUi()
             m_edtHumidity[i]->setText("--");
         }
     }
+    updatePlotRange();
 }
 
-bool MainWindow::validateConfig(QString *errorMessage) const
+AppConfig MainWindow::configWithSerialUi(AppConfig candidate) const
 {
-    return ConfigStore::validate(m_config, errorMessage);
-}
-
-void MainWindow::saveConfig()
-{
-    if (m_taskActive || m_collecting) {
-        QMessageBox::information(this, "任务运行中", "请先结束任务并停止采集，再保存参数。");
-        return;
-    }
     QStringList availablePorts;
     for (const auto &port : QSerialPortInfo::availablePorts())
         availablePorts.append(port.portName());
-    m_config.port = SerialPortPolicy::savedPort(
+    candidate.port = SerialPortPolicy::savedPort(
         availablePorts, m_cbxPort->currentData().toString(), m_config.port,
-        m_config.simulatorEnabled);
-    m_config.baud = m_cbxBaud->currentText().toInt();
-    m_config.parity = m_cbxParity->currentText();
-    m_config.dataBits = m_cbxDataBit->currentText().toInt();
-    m_config.stopBits = m_cbxStopBit->currentText().toInt();
-    QString error;
-    if (!validateConfig(&error)) {
-        QMessageBox::warning(this, "配置无效", error);
-        return;
-    }
+        candidate.simulatorEnabled);
+    candidate.baud = m_cbxBaud->currentText().toInt();
+    candidate.parity = m_cbxParity->currentText();
+    candidate.dataBits = m_cbxDataBit->currentText().toInt();
+    candidate.stopBits = m_cbxStopBit->currentText().toInt();
+    return candidate;
+}
 
-    if (!ConfigStore::save(configFilePath(), m_config, &error)) {
-        QMessageBox::warning(this, "保存失败", error); return;
+bool MainWindow::commitConfig(const AppConfig &candidate)
+{
+    QString error;
+    if (!ConfigStore::validate(candidate, &error)) {
+        QMessageBox::warning(this, "配置无效", error);
+        return false;
     }
+    if (!ConfigStore::save(configFilePath(), candidate, &error)) {
+        QMessageBox::warning(this, "保存失败", error + "。本次修改未生效，仍使用原配置。");
+        return false;
+    }
+    // Publish the candidate only after the atomic INI sync has succeeded.
+    m_config = candidate;
+    return true;
+}
+
+bool MainWindow::saveConfig()
+{
+    if (m_taskActive || m_collecting) {
+        QMessageBox::information(this, "任务运行中", "请先结束任务并停止采集，再保存参数。");
+        return false;
+    }
+    if (!commitConfig(configWithSerialUi(m_config)))
+        return false;
     printLog("当前参数已保存。");
+    return true;
 }
 
 void MainWindow::refreshPortList()
@@ -487,14 +501,40 @@ void MainWindow::stopAcquisition()
 
 void MainWindow::updatePlot(int index, double temperature, double humidity)
 {
+    if (index < 0 || index >= kSensorLimit || !std::isfinite(temperature)
+        || !std::isfinite(humidity) || temperature < -100 || temperature > 200
+        || humidity < 0 || humidity > 100)
+        return;
     const double key = ++m_sampleSequence;
     m_plot->graph(index * 2)->addData(key, temperature);
     m_plot->graph(index * 2 + 1)->addData(key, humidity);
-    const double oldestKey = qMax(0.0, key - kMaximumPlotPoints);
+    const double oldestKey = qMax(0.0, key - kMaximumPlotPoints + 1.0);
     m_plot->graph(index * 2)->data()->removeBefore(oldestKey);
     m_plot->graph(index * 2 + 1)->data()->removeBefore(oldestKey);
     m_plot->xAxis->setRange(qMax(0.0, key - 200.0), key + 5.0);
-    m_plot->yAxis->setRange(-30.0, 100.0);
+    updatePlotRange();
+}
+
+void MainWindow::updatePlotRange()
+{
+    // Keep the familiar ambient scale, expanding for every visible module in
+    // the displayed time window. Hidden or expired points must not stretch it.
+    double minimum = -30.0, maximum = 100.0;
+    bool hasData = false;
+    for (int i = 0; i < m_plot->graphCount(); ++i) {
+        const auto *graph = m_plot->graph(i);
+        if (!graph->visible())
+            continue;
+        bool found = false;
+        const auto range = graph->getValueRange(found, QCP::sdBoth, m_plot->xAxis->range());
+        if (!found || !std::isfinite(range.lower) || !std::isfinite(range.upper))
+            continue;
+        hasData = true;
+        minimum = qMin(minimum, range.lower);
+        maximum = qMax(maximum, range.upper);
+    }
+    const double padding = hasData ? qMax(1.0, (maximum - minimum) * 0.05) : 0.0;
+    m_plot->yAxis->setRange(minimum - padding, maximum + padding);
 }
 
 

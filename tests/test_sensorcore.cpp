@@ -5,6 +5,12 @@
 
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QFile>
+#include <QDir>
+#include <QScopeGuard>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 #include <QtTest>
 
 class SensorCoreTest final : public QObject
@@ -18,6 +24,7 @@ private slots:
     void temperatureParsing_data();
     void temperatureParsing();
     void configReadWrite();
+    void configAtomicFailureAndUnknownKeys();
     void configDefaultsAndClamping();
     void alarmThreshold_data();
     void alarmThreshold();
@@ -81,13 +88,70 @@ void SensorCoreTest::configReadWrite()
     config.port = "COM8"; config.baud = 19200;
     config.sensors[1].enabled = true; config.sensors[1].slaveId = 7;
     QString error;
-    QVERIFY(ConfigStore::save(path, config, &error));
+    QVERIFY2(ConfigStore::save(path, config, &error), qPrintable(error));
     const auto read = ConfigStore::load(path);
     QCOMPARE(read.port, QString("COM8")); QCOMPARE(read.baud, 19200);
     QVERIFY(read.sensors[1].enabled); QCOMPARE(read.sensors[1].slaveId, 7);
     config.sensors[1].slaveId = config.sensors[0].slaveId;
     QVERIFY(!ConfigStore::save(path, config, &error));
     QCOMPARE(ConfigStore::load(path).sensors[1].slaveId, 7);
+}
+
+void SensorCoreTest::configAtomicFailureAndUnknownKeys()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto path = directory.filePath("atomic.ini");
+    auto config = ConfigStore::load(path);
+    config.port = "COM8";
+    QString error;
+    QVERIFY2(ConfigStore::save(path, config, &error), qPrintable(error));
+    QSettings reader(path, QSettings::IniFormat);
+    reader.setValue("Extension/keep", "unknown-key");
+    reader.sync();
+    const auto readBytes = [&path] {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) return QByteArray();
+        return file.readAll();
+    };
+    const auto previous = readBytes();
+    QVERIFY(!previous.isEmpty());
+    auto rejected = config;
+    rejected.sensors[1].enabled = true;
+    rejected.sensors[1].slaveId = rejected.sensors[0].slaveId;
+    QVERIFY(!ConfigStore::save(path, rejected, &error));
+    QCOMPARE(readBytes(), previous);
+    reader.sync();
+    QCOMPARE(reader.value("Serial/port").toString(), QString("COM8"));
+
+    auto candidate = config;
+    candidate.port = "COM12";
+    candidate.sensors[0].name = "原子提交新名称";
+#ifdef Q_OS_WIN
+    {
+        // Deny replacement of the live file, but allow readers. This forces
+        // the final atomic commit to fail even with elevated test privileges.
+        const HANDLE locked = CreateFileW(reinterpret_cast<LPCWSTR>(path.utf16()), GENERIC_READ,
+                                           FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                           FILE_ATTRIBUTE_NORMAL, nullptr);
+        QVERIFY(locked != INVALID_HANDLE_VALUE);
+        const auto unlock = qScopeGuard([locked] { CloseHandle(locked); });
+        QVERIFY(!ConfigStore::save(path, candidate, &error));
+        QCOMPARE(readBytes(), previous);
+        reader.sync();
+        QCOMPARE(reader.value("Serial/port").toString(), QString("COM8"));
+        QCOMPARE(ConfigStore::load(path).port, QString("COM8"));
+    }
+#endif
+    QVERIFY(ConfigStore::save(path, candidate, &error));
+    reader.sync();
+    QCOMPARE(reader.value("Serial/port").toString(), QString("COM12"));
+    QCOMPARE(reader.value("Extension/keep").toString(), QString("unknown-key"));
+    QCOMPARE(ConfigStore::load(path).sensors[0].name, candidate.sensors[0].name);
+    const auto committed = readBytes();
+    QVERIFY(QDir(directory.path()).mkdir("blocked.ini"));
+    QVERIFY(!ConfigStore::save(directory.filePath("blocked.ini"), candidate, &error));
+    QCOMPARE(readBytes(), committed);
 }
 
 void SensorCoreTest::configDefaultsAndClamping()

@@ -27,6 +27,9 @@ class MonitorService final : public QObject
     void finishTask(const QString &status = QStringLiteral("completed"));
     void acknowledge(qint64 alarmId, const QString &operatorName, const QString &note);
     void refresh();
+    void reloadRecords();
+    void browseAlarms(int direction, int filter = -1);
+    void browseTasks(int direction);
     void report(qint64 taskId);
     void shutdown();
   signals:
@@ -49,6 +52,16 @@ class MonitorService final : public QObject
     bool commitTransaction();
     QVariantList rows(const QString &sql, const QVariantList &args = {});
     void fail(const QString &context);
+    struct RecordPage {
+        QList<qint64> beforeIds{0};
+        qint64 snapshotId = 0, lastId = 0;
+        bool hasMore = false;
+    };
+    static constexpr int RecordPageSize = 100;
+    void movePage(RecordPage &page, int direction);
+    QVariantList alarmRecords();
+    QVariantList taskRecords();
+    QVariantMap pageInfo(const RecordPage &page) const;
     QSqlDatabase m_db;
     QString m_connection;
     std::array<ZoneMonitor, 4> m_zones;
@@ -60,5 +73,8 @@ class MonitorService final : public QObject
     bool m_ready = false, m_acquiring = false, m_simulator = false;
     QTimer *m_timer = nullptr;
     QString m_error;
+    RecordPage m_alarmPage, m_taskPage;
+    int m_alarmFilter = 0; // 0 all, 1 unrecovered, 2 unacknowledged, 3 completed
+    int m_pinnedAlarms = 0;
     std::unique_ptr<QLockFile> m_lock;
 };

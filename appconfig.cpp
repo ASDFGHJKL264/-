@@ -1,5 +1,8 @@
 #include "appconfig.h"
 #include <QSettings>
+#include <QFile>
+#include <QSaveFile>
+#include <QTemporaryDir>
 #include <QSet>
 #include <QStringList>
 #include <cmath>
@@ -82,33 +85,78 @@ bool ConfigStore::validate(const AppConfig &config, QString *errorMessage)
 
 bool ConfigStore::save(const QString &path, const AppConfig &config, QString *error)
 {
-    if (!validate(config, error)) return false;
-    QSettings settings(path, QSettings::IniFormat);
-    settings.setValue("Serial/port", config.port);
-    settings.setValue("Serial/baud", config.baud);
-    settings.setValue("Serial/databits", config.dataBits);
-    settings.setValue("Serial/parity", config.parity);
-    settings.setValue("Serial/stopbits", config.stopBits);
-    settings.setValue("Acquisition/intervalMs", config.pollIntervalMs);
-    settings.setValue("Acquisition/simulator", config.simulatorEnabled);
-    settings.setValue("Alarm/tempMin", config.temperatureMin);
-    settings.setValue("Alarm/tempMax", config.temperatureMax);
-    settings.setValue("Alarm/humMin", config.humidityMin);
-    settings.setValue("Alarm/humMax", config.humidityMax);
-    for (int i = 0; i < 4; ++i) {
-        const QString prefix = QString("Sensor%1/").arg(i + 1);
-        const auto &sensor = config.sensors[i];
-        settings.setValue(prefix + "enabled", sensor.enabled);
-        settings.setValue(prefix + "name", sensor.name);
-        settings.setValue(prefix + "slaveId", sensor.slaveId);
-        settings.setValue(prefix + "useInputReg", sensor.useInputRegisters);
-        settings.setValue(prefix + "tempAddr", sensor.temperatureRegister);
-        settings.setValue(prefix + "humAddr", sensor.humidityRegister);
-    }
-    settings.sync();
-    if (settings.status() != QSettings::NoError) {
-        if (error) *error = "配置写入失败";
+    if (!validate(config, error))
         return false;
+    const auto fail = [error](const QString &message)
+    {
+        if (error)
+            *error = message;
+        return false;
+    };
+    // Never stage changes in QSettings' shared backend for the live path.
+    // A failed sync could otherwise expose dirty candidate values to readers.
+    QByteArray previous;
+    QFile original(path);
+    if (original.exists())
+    {
+        if (!original.open(QIODevice::ReadOnly))
+            return fail("原配置读取失败：" + original.errorString());
+        previous = original.readAll();
+        if (original.error() != QFile::NoError)
+            return fail("原配置读取失败：" + original.errorString());
+        original.close();
     }
+    QTemporaryDir stagingDirectory;
+    if (!stagingDirectory.isValid())
+        return fail("无法创建配置暂存目录");
+    const auto stagingPath = stagingDirectory.filePath("config.ini");
+    QFile staging(stagingPath);
+    if (!staging.open(QIODevice::WriteOnly) || staging.write(previous) != previous.size()
+        || !staging.flush())
+        return fail("配置暂存失败：" + staging.errorString());
+    staging.close();
+    {
+        // Starting with the original bytes preserves unknown INI keys.
+        QSettings settings(stagingPath, QSettings::IniFormat);
+        settings.setValue("Serial/port", config.port);
+        settings.setValue("Serial/baud", config.baud);
+        settings.setValue("Serial/databits", config.dataBits);
+        settings.setValue("Serial/parity", config.parity);
+        settings.setValue("Serial/stopbits", config.stopBits);
+        settings.setValue("Acquisition/intervalMs", config.pollIntervalMs);
+        settings.setValue("Acquisition/simulator", config.simulatorEnabled);
+        settings.setValue("Alarm/tempMin", config.temperatureMin);
+        settings.setValue("Alarm/tempMax", config.temperatureMax);
+        settings.setValue("Alarm/humMin", config.humidityMin);
+        settings.setValue("Alarm/humMax", config.humidityMax);
+        for (int i = 0; i < 4; ++i)
+        {
+            const QString prefix = QString("Sensor%1/").arg(i + 1);
+            const auto &sensor = config.sensors[i];
+            settings.setValue(prefix + "enabled", sensor.enabled);
+            settings.setValue(prefix + "name", sensor.name);
+            settings.setValue(prefix + "slaveId", sensor.slaveId);
+            settings.setValue(prefix + "useInputReg", sensor.useInputRegisters);
+            settings.setValue(prefix + "tempAddr", sensor.temperatureRegister);
+            settings.setValue(prefix + "humAddr", sensor.humidityRegister);
+        }
+        settings.sync();
+        if (settings.status() != QSettings::NoError)
+        {
+            return fail("配置序列化失败");
+        }
+    }
+    QFile serialized(stagingPath);
+    if (!serialized.open(QIODevice::ReadOnly))
+        return fail("配置暂存读取失败：" + serialized.errorString());
+    const auto bytes = serialized.readAll();
+    if (serialized.error() != QFile::NoError)
+        return fail("配置暂存读取失败：" + serialized.errorString());
+    serialized.close();
+    QSaveFile destination(path);
+    destination.setDirectWriteFallback(false);
+    if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
+        !destination.commit())
+        return fail("配置写入失败：" + destination.errorString());
     return true;
 }

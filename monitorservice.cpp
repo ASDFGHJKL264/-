@@ -156,6 +156,7 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
         "CREATE TABLE IF NOT EXISTS monitor_alarms(id INTEGER PRIMARY KEY,zone INTEGER NOT NULL,name TEXT NOT NULL,metric INTEGER NOT NULL,direction INTEGER NOT NULL,value REAL NOT NULL,minimum REAL NOT NULL,maximum REAL NOT NULL,raised_at TEXT NOT NULL,ack_at TEXT,operator TEXT,note TEXT,recovered_at TEXT,task_id INTEGER REFERENCES monitor_tasks(id),simulator INTEGER NOT NULL)",
         "CREATE INDEX IF NOT EXISTS monitor_alarm_active ON monitor_alarms(zone,metric,recovered_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS monitor_alarm_one_active ON monitor_alarms(zone,metric) WHERE recovered_at IS NULL",
+        "CREATE INDEX IF NOT EXISTS monitor_alarm_unacknowledged ON monitor_alarms(id DESC) WHERE ack_at IS NULL",
         "CREATE TABLE IF NOT EXISTS monitor_actions(id INTEGER PRIMARY KEY,time TEXT NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL)"};
     for (const auto &sql : schema)
         if (!execute(sql)) {
@@ -391,8 +392,11 @@ void MonitorService::sample(int zone, const QString &name, int slave, double t, 
                             .arg(c.kind == AlarmTransition::Raised ? "报警发生" : "报警恢复",
                                  r.name, c.metric ? "湿度" : "温度"),
                         c.kind == AlarmTransition::Raised);
-    if (!transitions.isEmpty())
+    if (!transitions.isEmpty()) {
+        if (m_alarmPage.beforeIds.size() == 1)
+            m_alarmPage = {};
         refresh();
+    }
 }
 bool MonitorService::persistStats()
 {
@@ -456,6 +460,7 @@ void MonitorService::startTask(const QString &name, const QList<int> &zones, int
     m_stats = {};
     emit taskChanged(true, name);
     emit logMessage("监测任务已启动：" + name, false);
+    m_taskPage = {};
     refresh();
 }
 void MonitorService::finishTask(const QString &status)
@@ -481,6 +486,7 @@ void MonitorService::finishTask(const QString &status)
     m_taskZones.clear();
     emit taskChanged(false, {});
     emit logMessage("监测任务已结束", false);
+    m_taskPage = {};
     refresh();
 }
 void MonitorService::acknowledge(qint64 id, const QString &person, const QString &note)
@@ -505,6 +511,116 @@ void MonitorService::acknowledge(qint64 id, const QString &person, const QString
         q.numRowsAffected() ? "报警已确认，确认不会解除异常状态" : "记录不存在或已经确认", false);
     refresh();
 }
+void MonitorService::movePage(RecordPage &page, int direction)
+{
+    if (direction == 0) {
+        page = {};
+    } else if (direction < 0 && page.beforeIds.size() > 1) {
+        page.beforeIds.removeLast();
+    } else if (direction > 0 && page.hasMore && page.lastId > 0) {
+        page.beforeIds.append(page.lastId);
+    }
+}
+
+void MonitorService::reloadRecords()
+{
+    m_alarmPage = {};
+    m_taskPage = {};
+    refresh();
+}
+
+void MonitorService::browseAlarms(int direction, int filter)
+{
+    if (filter >= 0 && filter <= 3 && filter != m_alarmFilter) {
+        m_alarmFilter = filter;
+        m_alarmPage = {};
+    } else {
+        movePage(m_alarmPage, direction);
+    }
+    refresh();
+}
+
+void MonitorService::browseTasks(int direction)
+{
+    movePage(m_taskPage, direction);
+    refresh();
+}
+
+QVariantMap MonitorService::pageInfo(const RecordPage &page) const
+{
+    return {{"number", page.beforeIds.size()},
+            {"hasPrevious", page.beforeIds.size() > 1},
+            {"hasMore", page.hasMore},
+            {"pageSize", RecordPageSize},
+            {"snapshotId", page.snapshotId}};
+}
+
+QVariantList MonitorService::alarmRecords()
+{
+    // The unique (zone, metric) index bounds normal unrecovered incidents to eight.
+    // Pin them separately so an old incident remains visible on every history page.
+    QVariantList pinned;
+    if (m_alarmFilter != 3) {
+        QString sql = "SELECT * FROM monitor_alarms WHERE recovered_at IS NULL";
+        if (m_alarmFilter == 2)
+            sql += " AND ack_at IS NULL";
+        pinned = rows(sql + " ORDER BY id DESC LIMIT 8");
+    }
+    m_pinnedAlarms = pinned.size();
+    m_alarmPage.hasMore = false;
+    m_alarmPage.lastId = 0;
+    if (m_alarmFilter == 1)
+        return pinned;
+    if (m_alarmPage.snapshotId == 0) {
+        const auto maximum = rows("SELECT COALESCE(MAX(id),0) AS id FROM monitor_alarms");
+        if (!maximum.isEmpty())
+            m_alarmPage.snapshotId = maximum.first().toMap()["id"].toLongLong();
+    }
+    QString sql = "SELECT * FROM monitor_alarms WHERE recovered_at IS NOT NULL AND id<=?";
+    QVariantList args{m_alarmPage.snapshotId};
+    if (m_alarmFilter == 2)
+        sql += " AND ack_at IS NULL";
+    else if (m_alarmFilter == 3)
+        sql += " AND ack_at IS NOT NULL";
+    if (m_alarmPage.beforeIds.last() > 0) {
+        sql += " AND id<?";
+        args.append(m_alarmPage.beforeIds.last());
+    }
+    sql += " ORDER BY id DESC LIMIT ?";
+    args.append(RecordPageSize + 1);
+    auto history = rows(sql, args);
+    m_alarmPage.hasMore = history.size() > RecordPageSize;
+    if (m_alarmPage.hasMore)
+        history.removeLast();
+    if (!history.isEmpty())
+        m_alarmPage.lastId = history.last().toMap()["id"].toLongLong();
+    pinned.append(history);
+    return pinned;
+}
+
+QVariantList MonitorService::taskRecords()
+{
+    if (m_taskPage.snapshotId == 0) {
+        const auto maximum = rows("SELECT COALESCE(MAX(id),0) AS id FROM monitor_tasks");
+        if (!maximum.isEmpty())
+            m_taskPage.snapshotId = maximum.first().toMap()["id"].toLongLong();
+    }
+    QString sql = "SELECT * FROM monitor_tasks WHERE id<=?";
+    QVariantList args{m_taskPage.snapshotId};
+    if (m_taskPage.beforeIds.last() > 0) {
+        sql += " AND id<?";
+        args.append(m_taskPage.beforeIds.last());
+    }
+    sql += " ORDER BY id DESC LIMIT ?";
+    args.append(RecordPageSize + 1);
+    auto result = rows(sql, args);
+    m_taskPage.hasMore = result.size() > RecordPageSize;
+    if (m_taskPage.hasMore)
+        result.removeLast();
+    m_taskPage.lastId = result.isEmpty() ? 0 : result.last().toMap()["id"].toLongLong();
+    return result;
+}
+
 void MonitorService::refresh()
 {
     if (!m_ready)
@@ -516,11 +632,18 @@ void MonitorService::refresh()
     QVariantList rules;
     for (const auto &z : m_zones)
         rules.append(encodeRule(z.rule));
+    const auto alarms = alarmRecords();
+    const auto tasks = taskRecords();
+    auto alarmPage = pageInfo(m_alarmPage);
+    alarmPage["filter"] = m_alarmFilter;
+    alarmPage["pinned"] = m_pinnedAlarms;
     emit viewReady({{"rules", rules},
                     {"taskActive", m_taskId != 0},
                     {"acquiring", m_acquiring},
-                    {"alarms", rows("SELECT * FROM monitor_alarms ORDER BY id DESC LIMIT 500")},
-                    {"tasks", rows("SELECT * FROM monitor_tasks ORDER BY id DESC LIMIT 200")}});
+                    {"alarms", alarms},
+                    {"tasks", tasks},
+                    {"alarmPage", alarmPage},
+                    {"taskPage", pageInfo(m_taskPage)}});
 }
 void MonitorService::report(qint64 id)
 {
