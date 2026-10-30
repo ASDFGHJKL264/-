@@ -124,6 +124,15 @@ private slots:
         QCOMPARE(plot->graph(1)->data()->size(), 7);
         QCOMPARE(gapCount(plot->graph(0)), 1);
         QCOMPARE(gapCount(plot->graph(1)), 1);
+        for (int i = 0; i < 4; ++i) {
+            QCOMPARE(plot->graph(i * 2)->pen().widthF(), 2.0);
+            QCOMPARE(plot->graph(i * 2 + 1)->pen().widthF(), 1.0);
+            QCOMPARE(plot->graph(i * 2 + 1)->pen().style(), Qt::DashLine);
+            QCOMPARE(plot->graph(i * 2)->scatterStyle().shape(), QCPScatterStyle::ssNone);
+            QCOMPARE(plot->graph(i * 2 + 1)->scatterStyle().shape(), QCPScatterStyle::ssNone);
+        }
+        QVERIFY(plot->graph(8)->data()->isEmpty());
+        QVERIFY(plot->graph(9)->data()->isEmpty());
         const auto first = plot->graph(0)->data()->constBegin();
         QCOMPARE(first->value, readings.first().temperature);
         QVERIFY(plot->xAxis->range().lower < first->key);
@@ -204,19 +213,30 @@ private slots:
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        const auto base = sampleBase();
+        const auto base = sampleBase().addSecs(-600);
         QVERIFY(seedDatabase(directory.filePath("history.db"),
-                             {{base, 0, 25.0, 50.0}, {base.addSecs(600), 0, 25.0, 50.0}}));
+                             {{base, 0, 25.0, 50.0}, {base.addSecs(600), 0, 25.0, 50.0},
+                              {base.addSecs(1200), 0, 26.0, 51.0},
+                              {base.addMSecs(1200500), 0, 27.0, 52.0}}));
         HistoryDialog dialog(directory.filePath("history.db"));
         dialog.show();
         auto *plot = dialog.findChild<QCustomPlot *>();
         auto *query = queryButton(dialog);
         QVERIFY(plot && query);
         QTRY_VERIFY(query->isEnabled());
-        QCOMPARE(plot->graph(0)->data()->size(), 3);
-        QCOMPARE(gapCount(plot->graph(0)), 1);
-        QCOMPARE(gapCount(plot->graph(1)), 1);
-        QVERIFY(plot->graph(0)->scatterStyle().shape() != QCPScatterStyle::ssNone);
+        QCOMPARE(plot->graph(0)->data()->size(), 6);
+        QCOMPARE(gapCount(plot->graph(0)), 2);
+        QCOMPARE(gapCount(plot->graph(1)), 2);
+        QCOMPARE(plot->graph(0)->scatterStyle().shape(), QCPScatterStyle::ssNone);
+        QCOMPARE(plot->graph(8)->lineStyle(), QCPGraph::lsNone);
+        QVERIFY(plot->graph(8)->scatterStyle().shape() != QCPScatterStyle::ssNone);
+        QCOMPARE(plot->graph(8)->data()->size(), 2);
+        QCOMPARE(plot->graph(9)->data()->size(), 2);
+        QCOMPARE(plot->graph(8)->data()->constBegin()->key, base.toMSecsSinceEpoch() / 1000.0);
+        QCOMPARE((plot->graph(8)->data()->constEnd() - 1)->key, base.addSecs(600).toMSecsSinceEpoch() / 1000.0);
+        QVERIFY(plot->graph(8)->visible());
+        QVERIFY(!plot->legend->itemWithPlottable(plot->graph(8)));
+        QCOMPARE(plot->legend->itemCount(), 2);
     }
 };
 

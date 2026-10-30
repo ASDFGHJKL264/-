@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-31",
+  "version": "2026.10.31.1",
+  "target": "HistoryPresentationTests",
+  "result": "passed",
+  "ctestSeconds": 0.58,
+  "qtTestPassedEntries": 5,
+  "entryCountIncludesInitCleanup": true,
+  "historyStyle": {
+    "temperatureLineWidth": 2,
+    "humidityLineWidth": 1,
+    "humidityLineStyle": "DashLine",
+    "continuousSamplesHaveNoScatterMarkers": true,
+    "isolatedSamplesUseSeparateScatterGraphs": true,
+    "scatterGraphsExcludedFromLegend": true,
+    "mixedContinuousAndIsolatedSamplesChecked": true,
+    "emptyResultsClearAllGraphs": true
+  },
+  "previousFullValidation": "packaging/validation-20261031.json",
+  "limitations": ["temporary SQLite data only", "no hardware or aging test in this visual adjustment"]
+}

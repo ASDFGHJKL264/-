@@ -90,13 +90,20 @@ HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
         m_plot->addGraph();
         m_plot->graph(i * 2)->setName(QString("模块%1 温度").arg(i + 1));
         m_plot->graph(i * 2)->setPen(QPen(temperatureColors[i], 2));
-        m_plot->graph(i * 2)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, 3));
         m_plot->graph(i * 2)->removeFromLegend();
         m_plot->addGraph();
         m_plot->graph(i * 2 + 1)->setName(QString("模块%1 湿度").arg(i + 1));
-        m_plot->graph(i * 2 + 1)->setPen(QPen(humidityColors[i], 2, Qt::DashLine));
-        m_plot->graph(i * 2 + 1)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, 3));
+        m_plot->graph(i * 2 + 1)->setPen(QPen(humidityColors[i], 1, Qt::DashLine));
         m_plot->graph(i * 2 + 1)->removeFromLegend();
+    }
+    // Keep isolated samples visible without thickening densely sampled lines.
+    for (int i = 0; i < 8; ++i) {
+        auto *points = m_plot->addGraph();
+        points->setPen(QPen(m_plot->graph(i)->pen().color(), 1));
+        points->setLineStyle(QCPGraph::lsNone);
+        points->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, 3));
+        points->removeFromLegend();
+        points->setVisible(false);
     }
     m_plot->axisRect()->insetLayout()->take(m_plot->legend);
     m_plot->plotLayout()->addElement(1, 0, m_plot->legend);
@@ -204,13 +211,29 @@ void HistoryDialog::showRows(const QVariantList &rows)
     for (int i = 0; i < 4; ++i) {
         const bool hasData = !timeValues[i].isEmpty();
         insertHistoryGaps(timeValues[i], temperatures[i], humidities[i]);
+        QVector<double> isolatedTimes, isolatedTemperatures, isolatedHumidities;
+        for (qsizetype j = 0; j < timeValues[i].size(); ++j) {
+            const bool previousGap = j == 0 || qIsNaN(temperatures[i][j - 1]);
+            const bool nextGap = j + 1 == timeValues[i].size() || qIsNaN(temperatures[i][j + 1]);
+            if (!qIsNaN(temperatures[i][j]) && previousGap && nextGap) {
+                isolatedTimes.append(timeValues[i][j]);
+                isolatedTemperatures.append(temperatures[i][j]);
+                isolatedHumidities.append(humidities[i][j]);
+            }
+        }
         auto *temperatureGraph = m_plot->graph(i * 2);
         auto *humidityGraph = m_plot->graph(i * 2 + 1);
+        auto *temperaturePoints = m_plot->graph(8 + i * 2);
+        auto *humidityPoints = m_plot->graph(8 + i * 2 + 1);
         temperatureGraph->setData(timeValues[i], temperatures[i]);
         humidityGraph->setData(timeValues[i], humidities[i]);
+        temperaturePoints->setData(isolatedTimes, isolatedTemperatures);
+        humidityPoints->setData(isolatedTimes, isolatedHumidities);
         const bool selected = sensorIndex < 0 || sensorIndex == i;
         temperatureGraph->setVisible(selected && hasData);
         humidityGraph->setVisible(selected && hasData);
+        temperaturePoints->setVisible(selected && !isolatedTimes.isEmpty());
+        humidityPoints->setVisible(selected && !isolatedTimes.isEmpty());
         temperatureGraph->removeFromLegend();
         humidityGraph->removeFromLegend();
         if (selected && hasData) {
