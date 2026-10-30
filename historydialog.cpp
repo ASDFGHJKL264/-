@@ -10,7 +10,46 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QTimeZone>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <limits>
+
+namespace {
+double historyGapThreshold(const QVector<double> &times)
+{
+    QVector<double> intervals;
+    for (qsizetype i = 1; i < times.size(); ++i) {
+        const double interval = times[i] - times[i - 1];
+        // Polling is configurable up to 60 s. Longer gaps must not set the cadence.
+        if (interval > 0 && interval <= 60.001)
+            intervals.append(interval);
+    }
+    std::sort(intervals.begin(), intervals.end());
+    const double cadence = intervals.isEmpty() ? 0.5 : intervals[intervals.size() / 2];
+    return qMax(5.0, cadence * 3);
+}
+
+void insertHistoryGaps(QVector<double> &times, QVector<double> &temperatures,
+                       QVector<double> &humidities)
+{
+    const double threshold = historyGapThreshold(times);
+    QVector<double> separatedTimes, separatedTemperatures, separatedHumidities;
+    for (qsizetype i = 0; i < times.size(); ++i) {
+        if (i > 0 && times[i] - times[i - 1] > threshold) {
+            separatedTimes.append(times[i - 1] + (times[i] - times[i - 1]) / 2);
+            separatedTemperatures.append(std::numeric_limits<double>::quiet_NaN());
+            separatedHumidities.append(std::numeric_limits<double>::quiet_NaN());
+        }
+        separatedTimes.append(times[i]);
+        separatedTemperatures.append(temperatures[i]);
+        separatedHumidities.append(humidities[i]);
+    }
+    times.swap(separatedTimes);
+    temperatures.swap(separatedTemperatures);
+    humidities.swap(separatedHumidities);
+}
+}
 
 HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
     : QDialog(parent), m_query(new HistoryQuery(databasePath, this))
@@ -51,16 +90,27 @@ HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
         m_plot->addGraph();
         m_plot->graph(i * 2)->setName(QString("模块%1 温度").arg(i + 1));
         m_plot->graph(i * 2)->setPen(QPen(temperatureColors[i], 2));
+        m_plot->graph(i * 2)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, 3));
+        m_plot->graph(i * 2)->removeFromLegend();
         m_plot->addGraph();
         m_plot->graph(i * 2 + 1)->setName(QString("模块%1 湿度").arg(i + 1));
         m_plot->graph(i * 2 + 1)->setPen(QPen(humidityColors[i], 2, Qt::DashLine));
+        m_plot->graph(i * 2 + 1)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, 3));
+        m_plot->graph(i * 2 + 1)->removeFromLegend();
     }
-    m_plot->legend->setVisible(true);
-    m_plot->xAxis->setLabel("时间");
+    m_plot->axisRect()->insetLayout()->take(m_plot->legend);
+    m_plot->plotLayout()->addElement(1, 0, m_plot->legend);
+    m_plot->plotLayout()->setRowStretchFactor(1, 0.001);
+    m_plot->legend->setFillOrder(QCPLayoutGrid::foColumnsFirst);
+    m_plot->legend->setWrap(4);
+    m_plot->legend->setBorderPen(QPen(Qt::NoPen));
+    m_plot->legend->setVisible(false);
+    m_plot->xAxis->setLabel("时间（本地）");
     m_plot->yAxis->setLabel("温度/湿度");
-    m_plot->xAxis->setTicker(QSharedPointer<QCPAxisTickerDateTime>(new QCPAxisTickerDateTime));
-    qSharedPointerCast<QCPAxisTickerDateTime>(m_plot->xAxis->ticker())
-        ->setDateTimeFormat("MM-dd\nHH:mm");
+    auto dateTimeTicker = QSharedPointer<QCPAxisTickerDateTime>::create();
+    dateTimeTicker->setTimeZone(QTimeZone::systemTimeZone());
+    dateTimeTicker->setDateTimeFormat("MM-dd\nHH:mm:ss");
+    m_plot->xAxis->setTicker(dateTimeTicker);
 
     m_table = new QTableWidget;
     m_table->setColumnCount(5);
@@ -137,11 +187,13 @@ void HistoryDialog::showRows(const QVariantList &rows)
         const int row = m_table->rowCount();
         m_table->insertRow(row);
         const QDateTime time = QDateTime::fromString(fields.at(0).toString(), Qt::ISODateWithMs);
-        m_table->setItem(row, 0, new QTableWidgetItem(time.toString("yyyy-MM-dd HH:mm:ss")));
-        for (int column = 1; column < 5; ++column)
+        m_table->setItem(row, 0, new QTableWidgetItem(time.toLocalTime().toString("yyyy-MM-dd HH:mm:ss.zzz")));
+        for (int column = 1; column < 3; ++column)
             m_table->setItem(row, column, new QTableWidgetItem(fields.at(column).toString()));
+        for (int column = 3; column < 5; ++column)
+            m_table->setItem(row, column, new QTableWidgetItem(QString::number(fields.at(column).toDouble(), 'f', 2)));
         const int rowSensorIndex = fields.at(5).toInt();
-        if (rowSensorIndex < 0 || rowSensorIndex >= 4)
+        if (rowSensorIndex < 0 || rowSensorIndex >= 4 || !time.isValid())
             continue;
         timeValues[rowSensorIndex].append(time.toMSecsSinceEpoch() / 1000.0);
         temperatures[rowSensorIndex].append(fields.at(3).toDouble());
@@ -150,24 +202,33 @@ void HistoryDialog::showRows(const QVariantList &rows)
 
     bool hasAnyData = false;
     for (int i = 0; i < 4; ++i) {
+        const bool hasData = !timeValues[i].isEmpty();
+        insertHistoryGaps(timeValues[i], temperatures[i], humidities[i]);
         auto *temperatureGraph = m_plot->graph(i * 2);
         auto *humidityGraph = m_plot->graph(i * 2 + 1);
         temperatureGraph->setData(timeValues[i], temperatures[i]);
         humidityGraph->setData(timeValues[i], humidities[i]);
         const bool selected = sensorIndex < 0 || sensorIndex == i;
-        const bool hasData = !timeValues[i].isEmpty();
         temperatureGraph->setVisible(selected && hasData);
         humidityGraph->setVisible(selected && hasData);
         temperatureGraph->removeFromLegend();
         humidityGraph->removeFromLegend();
-        if (selected) {
+        if (selected && hasData) {
             temperatureGraph->addToLegend();
             humidityGraph->addToLegend();
         }
         if (selected && hasData)
             hasAnyData = true;
     }
-    if (hasAnyData)
-        m_plot->rescaleAxes();
+    m_plot->legend->setVisible(hasAnyData);
+    if (hasAnyData) {
+        m_plot->rescaleAxes(true);
+        m_plot->xAxis->scaleRange(1.02, m_plot->xAxis->range().center());
+        m_plot->yAxis->scaleRange(1.10, m_plot->yAxis->range().center());
+    } else {
+        const double now = QDateTime::currentMSecsSinceEpoch() / 1000.0;
+        m_plot->xAxis->setRange(now - 60, now);
+        m_plot->yAxis->setRange(0, 100);
+    }
     m_plot->replot();
 }

@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-31",
+  "version": "2026.10.31",
+  "command": "scripts/verify.ps1 -LifecycleCycles 100",
+  "targets": 6,
+  "result": "passed",
+  "ctestSeconds": 31.55,
+  "qtTestPassedEntries": [17, 11, 4, 8, 6, 5],
+  "entryCountIncludesInitCleanupAndDataRows": true,
+  "lifecycle": {"cycles": 100, "saved": 519, "maximumCloseMs": 38},
+  "historyPresentation": {
+    "explicitSystemTimeZone": true,
+    "gapThresholdSeconds": "max(5, median(positive intervals <= 60 seconds) * 3); fallback cadence 0.5 seconds",
+    "nanGapsOnlyAffectPlot": true,
+    "legendOutsidePlotAndOnlyNonemptyModules": true,
+    "displayDecimals": 2,
+    "displayTimeMilliseconds": true,
+    "databaseValuesUnchanged": true
+  },
+  "limitations": [
+    "simulator and temporary SQLite data only",
+    "gap threshold is a display estimate, not a session identifier",
+    "not a hardware or worst-case latency benchmark",
+    "no 24-hour aging test"
+  ]
+}
