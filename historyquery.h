@@ -6,7 +6,7 @@
 class HistoryQuery final : public QObject {
     Q_OBJECT
 public:
-    enum Operation { Samples, Alarms, ClearAlarms };
+    enum Operation { Samples };
     static constexpr int PageSize = 500;
     HistoryQuery(const QString &databasePath, QObject *parent = nullptr);
     ~HistoryQuery() override;

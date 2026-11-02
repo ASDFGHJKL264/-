@@ -47,7 +47,8 @@ bool ConfigStore::validate(const AppConfig &config, QString *errorMessage)
         || !std::isfinite(config.humidityMin) || !std::isfinite(config.humidityMax)
         || config.temperatureMin < -100 || config.temperatureMax > 200
         || config.humidityMin < 0 || config.humidityMax > 100) {
-        *errorMessage = "采集周期、串口或报警范围无效"; return false;
+        *errorMessage = "采集周期、串口或报警范围无效";
+        return false;
     }
     if (config.temperatureMin >= config.temperatureMax ||
         config.humidityMin >= config.humidityMax) {

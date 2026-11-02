@@ -23,7 +23,7 @@ target_link_libraries(SensorRuntime PUBLIC Qt6::Core Qt6::SerialPort Qt6::Serial
 
 qt_add_library(SensorWidgets STATIC
     mainwindow.h mainwindow.cpp mainwindow.ui
-    historydialog.h historydialog.cpp alarmdialog.h alarmdialog.cpp
+    historydialog.h historydialog.cpp
     sensorconfigdialog.h sensorconfigdialog.cpp
     monitordialog.h monitordialog.cpp qcustomplot.h qcustomplot.cpp)
 target_link_libraries(SensorWidgets PUBLIC SensorRuntime Qt6::Widgets Qt6::PrintSupport)
@@ -54,7 +54,10 @@ if(BUILD_TESTING)
     qt_add_executable(HistoryPresentationTests tests/test_historypresentation.cpp)
     target_link_libraries(HistoryPresentationTests PRIVATE SensorWidgets Qt6::Test)
     add_test(NAME HistoryPresentationTests COMMAND HistoryPresentationTests -platform offscreen -o history-presentation-results.txt,txt)
+    qt_add_executable(AlarmMigrationTests tests/test_alarmmigration.cpp)
+    target_link_libraries(AlarmMigrationTests PRIVATE SensorRuntime Qt6::Test)
+    add_test(NAME AlarmMigrationTests COMMAND AlarmMigrationTests -o alarm-migration-results.txt,txt)
     set_tests_properties(SensorCoreTests MonitorBusinessTests MonitorUiTests AcquisitionTests PROPERTIES TIMEOUT 60)
     set_tests_properties(WindowLifecycleTests PROPERTIES TIMEOUT 180)
-    set_tests_properties(HistoryPresentationTests PROPERTIES TIMEOUT 60)
+    set_tests_properties(HistoryPresentationTests AlarmMigrationTests PROPERTIES TIMEOUT 60)
 endif()

@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QPushButton>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -13,6 +14,7 @@
 #include <QUuid>
 #include <QtTest>
 #include <cmath>
+#include <limits>
 
 namespace {
 struct Reading {
@@ -174,10 +176,20 @@ private slots:
         QCOMPARE(table->rowCount(), 0);
         QCOMPARE(plot->legend->itemCount(), 0);
         QVERIFY(!plot->legend->visible());
+        QVERIFY(plot->axisRect()->rect().width() > plot->width() * 0.7);
+        QVERIFY(dialog.grab().save("history-presentation-empty.png"));
         for (int i = 0; i < plot->graphCount(); ++i) {
             QVERIFY(plot->graph(i)->data()->isEmpty());
             QVERIFY(!plot->graph(i)->visible());
         }
+        sensor->setCurrentIndex(sensor->findData(-1));
+        QTest::mouseClick(query, Qt::LeftButton);
+        QTRY_VERIFY(query->isEnabled());
+        QCOMPARE(table->rowCount(), 6);
+        QCOMPARE(plot->legend->itemCount(), 2);
+        QVERIFY(plot->legend->visible());
+        QCOMPARE(plot->plotLayout()->element(1, 0), static_cast<QCPLayoutElement *>(plot->legend));
+        QVERIFY(plot->axisRect()->rect().width() > plot->width() * 0.7);
     }
 
     void slowCadenceAndMultipleModules()
@@ -237,6 +249,69 @@ private slots:
         QVERIFY(plot->graph(8)->visible());
         QVERIFY(!plot->legend->itemWithPlottable(plot->graph(8)));
         QCOMPARE(plot->legend->itemCount(), 2);
+    }
+
+    void timeLabelsRemainDistinctAndSeparated_data()
+    {
+        QTest::addColumn<double>("seconds");
+        QTest::addColumn<int>("fontSize");
+        QTest::addColumn<int>("windowWidth");
+        QTest::newRow("subsecond") << 0.5 << 10 << 900;
+        QTest::newRow("seconds-large-font") << 2.0 << 20 << 900;
+        QTest::newRow("minutes-large-font") << 1200.0 << 20 << 900;
+        QTest::newRow("days") << 7.0 * 86400 << 16 << 900;
+        QTest::newRow("years") << 730.0 * 86400 << 20 << 900;
+    }
+
+    void timeLabelsRemainDistinctAndSeparated()
+    {
+        QFETCH(double, seconds);
+        QFETCH(int, fontSize);
+        QFETCH(int, windowWidth);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVERIFY(seedDatabase(directory.filePath("history.db"), {}));
+        HistoryDialog dialog(directory.filePath("history.db"));
+        dialog.resize(windowWidth, 650);
+        dialog.show();
+        auto *plot = dialog.findChild<QCustomPlot *>();
+        auto *query = queryButton(dialog);
+        QVERIFY(plot && query);
+        QTRY_VERIFY(query->isEnabled());
+        QFont font = plot->xAxis->tickLabelFont();
+        font.setPointSize(fontSize);
+        plot->xAxis->setTickLabelFont(font);
+        const auto base = sampleBase().toMSecsSinceEpoch() / 1000.0;
+        plot->xAxis->setRange(base, base + seconds);
+
+        // Recheck after growing and shrinking the window: resize must recompute label spacing.
+        for (int width : {windowWidth, windowWidth + 500, windowWidth}) {
+            dialog.resize(width, 650);
+            QApplication::processEvents();
+            plot->replot();
+            QVERIFY(plot->axisRect()->rect().width() > plot->width() * 0.7);
+            const auto ticks = plot->xAxis->tickVector();
+            const auto labels = plot->xAxis->tickVectorLabels();
+            QVERIFY(labels.size() >= 2);
+            QCOMPARE(ticks.size(), labels.size());
+            const QFontMetricsF metrics(plot->xAxis->tickLabelFont());
+            double previousRight = -std::numeric_limits<double>::infinity();
+            for (qsizetype i = 0; i < labels.size(); ++i) {
+                QVERIFY(!labels[i].isEmpty());
+                if (i > 0)
+                    QVERIFY(labels[i] != labels[i - 1]);
+                double labelWidth = 0;
+                for (const auto &line : labels[i].split('\n'))
+                    labelWidth = qMax(labelWidth, metrics.horizontalAdvance(line));
+                const auto center = plot->xAxis->coordToPixel(ticks[i]);
+                QVERIFY2(center - labelWidth / 2 >= previousRight + 8,
+                         qPrintable(QString("Labels overlap: %1, axis width %2")
+                                        .arg(labels[i])
+                                        .arg(plot->axisRect()->rect().width())));
+                previousRight = center + labelWidth / 2;
+            }
+        }
+        QVERIFY(dialog.grab().save(QString("history-time-axis-%1.png").arg(QTest::currentDataTag())));
     }
 };
 

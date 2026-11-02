@@ -19,7 +19,7 @@ void ZoneMonitor::invalidate()
     for (auto &c : channels) {
         c.pendingSince = c.recoverySince = -1;
         c.pendingDirection = 0;
-    } // Active incidents remain active when data is missing.
+    }
 }
 void ZoneMonitor::tick(qint64 now)
 {

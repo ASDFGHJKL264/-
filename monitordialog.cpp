@@ -16,6 +16,9 @@
 #include <QFileDialog>
 #include <QSaveFile>
 #include <QSignalBlocker>
+#include <QJsonDocument>
+#include <QDateTimeEdit>
+#include <QDateTime>
 
 namespace
 {
@@ -112,13 +115,13 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
     auto *alarmPage = new QWidget;
     auto *alarmLayout = new QVBoxLayout(alarmPage);
     auto *alarmHint = new QLabel(
-        "未恢复报警固定置顶（翻页时仍显示）；历史每页最多100条。待确认筛选可查找旧记录，确认和恢复相互独立。新增历史请点首页或刷新。旧版报警仍在原“报警记录”窗口。");
+        "未恢复报警固定置顶，时间条件仅筛选历史；每页最多100条，确认与恢复相互独立。旧版记录统一到“旧版归档”，只读保留原始信息，未知恢复状态和数据来源不参与当前报警判断。");
     alarmHint->setWordWrap(true);
     alarmLayout->addWidget(alarmHint);
     auto *alarmNavigation = new QHBoxLayout;
     m_alarmFilter = new QComboBox;
     m_alarmFilter->setObjectName("alarmRecordFilter");
-    m_alarmFilter->addItems({"全部报警", "未恢复报警", "待确认报警", "已完成报警"});
+    m_alarmFilter->addItems({"业务报警", "未恢复报警", "待确认报警", "已完成报警", "旧版归档"});
     auto *alarmFirst = new QPushButton("首页 / 最新");
     alarmFirst->setObjectName("alarmFirstPage");
     m_alarmPrevious = new QPushButton("上一页");
@@ -134,6 +137,41 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
     alarmNavigation->addWidget(m_alarmPageLabel);
     alarmNavigation->addStretch();
     alarmLayout->addLayout(alarmNavigation);
+    auto *alarmSearch = new QHBoxLayout;
+    auto *zoneFilter = new QComboBox;
+    zoneFilter->setObjectName("alarmZoneFilter");
+    zoneFilter->addItem("全部区域 / 模块", -1);
+    for (int i = 0; i < 4; ++i)
+        zoneFilter->addItem(QString("区域 / 模块%1").arg(i + 1), i);
+    auto *useTime = new QCheckBox("筛选历史时间（本地）");
+    useTime->setObjectName("alarmUseTimeFilter");
+    auto *from = new QDateTimeEdit(QDateTime::currentDateTime().addDays(-7));
+    auto *to = new QDateTimeEdit(QDateTime::currentDateTime());
+    from->setObjectName("alarmTimeFrom");
+    to->setObjectName("alarmTimeTo");
+    for (auto *edit : {from, to}) {
+        edit->setCalendarPopup(true);
+        edit->setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz");
+        edit->setEnabled(false);
+        connect(useTime, &QCheckBox::toggled, edit, &QDateTimeEdit::setEnabled);
+    }
+    auto *search = new QPushButton("查询报警");
+    search->setObjectName("searchAlarmHistory");
+    alarmSearch->addWidget(zoneFilter);
+    alarmSearch->addWidget(useTime);
+    alarmSearch->addWidget(from);
+    alarmSearch->addWidget(new QLabel("至"));
+    alarmSearch->addWidget(to);
+    alarmSearch->addWidget(search);
+    alarmLayout->addLayout(alarmSearch);
+    connect(search, &QPushButton::clicked, this, [this, zoneFilter, useTime, from, to] {
+        const int zone = zoneFilter->currentData().toInt();
+        const auto start = useTime->isChecked() ? from->dateTime().toString(Qt::ISODateWithMs) : QString();
+        const auto end = useTime->isChecked() ? to->dateTime().toString(Qt::ISODateWithMs) : QString();
+        QMetaObject::invokeMethod(m_service, [s = m_service, zone, start, end] {
+            s->filterAlarmHistory(zone, start, end);
+        });
+    });
     connect(m_alarmFilter, &QComboBox::currentIndexChanged, this, [this](int filter) {
         QMetaObject::invokeMethod(m_service, [s = m_service, filter] {
             s->browseAlarms(0, filter);
@@ -148,7 +186,7 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
         });
     }
     m_alarms = table({"ID", "区域", "类型", "方向", "发生值", "发生UTC", "确认UTC", "恢复UTC",
-                      "操作人", "备注", "数据源"});
+                      "操作人", "备注", "数据源", "从机地址", "下限", "上限", "旧版ID / 原时间"});
     m_alarms->setObjectName("businessAlarmTable");
     alarmLayout->addWidget(m_alarms);
     auto *ack = new QPushButton("确认选中报警并填写处理备注");
@@ -157,6 +195,10 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
         int row = m_alarms->currentRow();
         if (row < 0)
             return;
+        if (m_alarms->item(row, 0)->data(Qt::UserRole).toBool()) {
+            QMessageBox::information(this, "旧版归档", "旧版记录只读，无法补确认或推断恢复状态。");
+            return;
+        }
         const auto id = m_alarms->item(row, 0)->text().toLongLong();
         bool ok = false;
         auto person = QInputDialog::getText(this, "报警确认", "操作人（非登录认证）：",
@@ -306,22 +348,28 @@ void MonitorDialog::updateView(const QVariantMap &v)
     m_alarms->setRowCount(0);
     for (const auto &item : alarms) {
         auto r = item.toMap();
+        const bool legacy = !r["legacy_record"].isNull();
+        const auto original = QJsonDocument::fromJson(r["legacy_record"].toString().toUtf8()).toVariant().toMap();
         QStringList fields = {r["id"].toString(),
                               r["name"].toString(),
-                              r["metric"].toInt() ? "湿度" : "温度",
-                              r["direction"].toInt() < 0 ? "低于下限" : "高于上限",
+                              legacy ? original["alarm_type"].toString() : r["metric"].toInt() ? "湿度" : "温度",
+                              r["direction"].toInt() < 0 ? "低于下限" : r["direction"].toInt() > 0 ? "高于上限" : "未知",
                               r["value"].toString(),
                               r["raised_at"].toString(),
-                              r["ack_at"].isNull() ? "未确认" : r["ack_at"].toString(),
-                              r["recovered_at"].isNull() ? "未恢复" : r["recovered_at"].toString(),
+                              legacy ? "未知（旧版归档）" : r["ack_at"].isNull() ? "未确认" : r["ack_at"].toString(),
+                              legacy ? "未知（旧版归档）" : r["recovered_at"].isNull() ? "未恢复" : r["recovered_at"].toString(),
                               r["operator"].toString(),
                               r["note"].toString(),
-                              r["simulator"].toBool() ? "模拟" : "硬件"};
+                              legacy ? "未知（旧版归档）" : r["simulator"].toBool() ? "模拟" : "硬件",
+                              r["slave_id"].isNull() ? "未知" : r["slave_id"].toString(),
+                              r["minimum"].toString(), r["maximum"].toString(),
+                              legacy ? original.value("id", "无ID").toString() + " / " + original["alarm_time"].toString() : ""};
         int row = m_alarms->rowCount();
         m_alarms->insertRow(row);
         for (int c = 0; c < fields.size(); ++c)
             m_alarms->setItem(row, c, new QTableWidgetItem(fields[c]));
-        if (r["recovered_at"].isNull())
+        m_alarms->item(row, 0)->setData(Qt::UserRole, legacy);
+        if (!legacy && r["recovered_at"].isNull())
             for (int c = 0; c < fields.size(); ++c)
                 m_alarms->item(row, c)->setBackground(QColor(255, 238, 224));
     }

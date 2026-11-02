@@ -10,8 +10,10 @@ MonitoringController::MonitoringController(const QString &path, const AppConfig 
     m_service->moveToThread(&m_thread);
     connect(&m_thread, &QThread::finished, m_service, &QObject::deleteLater);
     connect(m_service, &MonitorService::initialized, this, [this](bool ok) {
-        if (m_shuttingDown) return;
-        m_ready = ok; emit ready(ok);
+        if (m_shuttingDown)
+            return;
+        m_ready = ok;
+        emit ready(ok);
     });
     connect(m_service, &MonitorService::logMessage, this, &MonitoringController::logMessage);
     connect(&m_acquisition, &AcquisitionController::logMessage, this, &MonitoringController::logMessage);
@@ -55,7 +57,8 @@ MonitoringController::MonitoringController(const QString &path, const AppConfig 
             DatabaseManager schema(path);
             if (!schema.initialize(&error)) {
                 emit s->logMessage("数据库初始化失败：" + error, true);
-                emit s->initialized(false); return;
+                emit s->initialized(false);
+                return;
             }
             if (!schema.cleanupOldData(30, &error))
                 emit s->logMessage("旧历史清理失败：" + error, true);
@@ -63,24 +66,34 @@ MonitoringController::MonitoringController(const QString &path, const AppConfig 
         s->initialize(path, rules);
     });
 }
-MonitoringController::~MonitoringController() { shutdown(); }
+MonitoringController::~MonitoringController() {
+    shutdown();
+}
 bool MonitoringController::start(const AppConfig &config)
 {
-    if (m_shuttingDown || !m_ready) { emit logMessage("后台存储尚未就绪，不能开始采集", true); return false; }
-    if (m_acquisition.active()) return false;
+    if (m_shuttingDown || !m_ready) {
+        emit logMessage("后台存储尚未就绪，不能开始采集", true);
+        return false;
+    }
+    if (m_acquisition.active())
+        return false;
     m_sessionConfig = config;
     return m_acquisition.start(config);
 }
-void MonitoringController::stop() { m_acquisition.stop(); }
+void MonitoringController::stop() {
+    m_acquisition.stop();
+}
 void MonitoringController::shutdown()
 {
     if (m_shuttingDown) return;
     m_shuttingDown = true;
-    if (!m_thread.isRunning()) return;
+    if (!m_thread.isRunning())
+        return;
     stop();
     m_ready = false;
     QMetaObject::invokeMethod(m_service, [s = m_service] {
-        s->shutdown(); QThread::currentThread()->quit();
+        s->shutdown();
+        QThread::currentThread()->quit();
     });
     m_thread.wait(); // producers stopped; bounded accepted work drains before shutdown
     m_service = nullptr;
@@ -89,7 +102,8 @@ void MonitoringController::shutdown()
 QVariantMap MonitoringController::metrics() const
 {
     auto result = m_acquisition.metrics();
-    result.insert("saved", m_saved); result.insert("storageFailed", m_failed);
+    result.insert("saved", m_saved);
+    result.insert("storageFailed", m_failed);
     result.insert("maxStorageMs", m_maxStorageMs);
     return result;
 }

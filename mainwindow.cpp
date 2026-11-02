@@ -1,5 +1,4 @@
 #include "mainwindow.h"
-#include "alarmdialog.h"
 #include "historydialog.h"
 #include "sensorconfigdialog.h"
 #include "monitoringcontroller.h"
@@ -82,16 +81,10 @@ void MainWindow::initializeDataMenus()
     auto *sensorConfigAction = settingsMenu->addAction("传感器配置");
     connect(sensorConfigAction, &QAction::triggered, this, &MainWindow::showSensorConfigDialog);
 
-    auto *dataMenu = menuBar()->addMenu("数据");
-    auto *historyAction = dataMenu->addAction("历史数据查询");
-    auto *alarmAction = dataMenu->addAction("报警记录");
+    auto *historyAction = menuBar()->addAction("历史查询");
+    historyAction->setObjectName("openHistoryQuery");
     connect(historyAction, &QAction::triggered, this, [this] {
         auto *dialog = new HistoryDialog(m_dataDirectory + "/data/environment.db", this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->show();
-    });
-    connect(alarmAction, &QAction::triggered, this, [this] {
-        auto *dialog = new AlarmDialog(m_dataDirectory + "/data/environment.db", this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
     });
@@ -400,7 +393,10 @@ void MainWindow::refreshPortList()
 
 void MainWindow::toggleConnect()
 {
-    if (m_collecting) { stopAcquisition(); return; }
+    if (m_collecting) {
+        stopAcquisition();
+        return;
+    }
     auto config = m_config;
     config.port = m_cbxPort->currentData().toString();
     config.baud = m_cbxBaud->currentText().toInt();
@@ -423,7 +419,8 @@ void MainWindow::initializeMonitoring()
     m_monitor = m_controller->service();
     connect(m_controller, &MonitoringController::logMessage, this, &MainWindow::printLog);
     connect(m_controller, &MonitoringController::ready, this, [this](bool ok) {
-        m_monitorReady = ok; m_btnConnect->setEnabled(ok);
+        m_monitorReady = ok;
+        m_btnConnect->setEnabled(ok);
     });
     m_btnConnect->setEnabled(false);
     connect(m_controller, &MonitoringController::sampleReady, this, &MainWindow::handleSample);
@@ -496,7 +493,8 @@ void MainWindow::showMonitoring()
 
 void MainWindow::stopAcquisition()
 {
-    if (m_controller) m_controller->stop();
+    if (m_controller)
+        m_controller->stop();
 }
 
 void MainWindow::updatePlot(int index, double temperature, double humidity)

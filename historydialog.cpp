@@ -4,6 +4,7 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDateTimeEdit>
+#include <QFontMetricsF>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -16,6 +17,66 @@
 #include <limits>
 
 namespace {
+class HistoryTimeTicker final : public QCPAxisTickerDateTime
+{
+public:
+    explicit HistoryTimeTicker(QCPAxis *axis) : m_axis(axis)
+    {
+        setTimeZone(QTimeZone::systemTimeZone());
+    }
+
+    void generate(const QCPRange &range, const QLocale &locale, QChar formatChar, int precision,
+                  QVector<double> &ticks, QVector<double> *subTicks,
+                  QVector<QString> *tickLabels) override
+    {
+        // Subsecond ticks need milliseconds; long histories need the year as well.
+        setDateTimeFormat(range.size() < 10 ? "MM-dd\nHH:mm:ss.zzz"
+                          : range.size() < 2 * 86400 ? "MM-dd\nHH:mm:ss"
+                          : range.size() < 90 * 86400 ? "yyyy-MM-dd\nHH:mm"
+                                                                   : "yyyy-MM-dd");
+        if (!m_axis) {
+            QCPAxisTickerDateTime::generate(range, locale, formatChar, precision, ticks,
+                                            subTicks, tickLabels);
+            return;
+        }
+
+        const QFontMetricsF metrics(m_axis->tickLabelFont());
+        const auto axisMargins = m_axis->axisRect()->margins();
+        const auto layoutMargins = m_axis->parentPlot()->plotLayout()->margins();
+        // Use the current viewport, since the old axis rect can still have its pre-resize size.
+        const double width = qMax(1.0, m_axis->parentPlot()->viewport().width()
+                                          - axisMargins.left() - axisMargins.right()
+                                          - layoutMargins.left() - layoutMargins.right()
+                                          - metrics.horizontalAdvance("00"));
+        QVector<QString> labels;
+        for (int count = 7; count >= 1; --count) {
+            setTickCount(count);
+            QCPAxisTickerDateTime::generate(range, locale, formatChar, precision, ticks,
+                                            subTicks, &labels);
+            bool fits = true;
+            double previousWidth = 0;
+            for (qsizetype i = 0; i < labels.size(); ++i) {
+                double labelWidth = 0;
+                for (const auto &line : labels[i].split('\n'))
+                    labelWidth = qMax(labelWidth, metrics.horizontalAdvance(line));
+                if (i > 0 && (ticks[i] - ticks[i - 1]) * width / range.size()
+                                 < (previousWidth + labelWidth) / 2 + 16) {
+                    fits = false;
+                    break;
+                }
+                previousWidth = labelWidth;
+            }
+            if (fits)
+                break;
+        }
+        if (tickLabels)
+            *tickLabels = labels;
+    }
+
+private:
+    QPointer<QCPAxis> m_axis;
+};
+
 double historyGapThreshold(const QVector<double> &times)
 {
     QVector<double> intervals;
@@ -106,17 +167,13 @@ HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
         points->setVisible(false);
     }
     m_plot->axisRect()->insetLayout()->take(m_plot->legend);
-    m_plot->plotLayout()->addElement(1, 0, m_plot->legend);
-    m_plot->plotLayout()->setRowStretchFactor(1, 0.001);
     m_plot->legend->setFillOrder(QCPLayoutGrid::foColumnsFirst);
     m_plot->legend->setWrap(4);
     m_plot->legend->setBorderPen(QPen(Qt::NoPen));
     m_plot->legend->setVisible(false);
     m_plot->xAxis->setLabel("时间（本地）");
     m_plot->yAxis->setLabel("温度/湿度");
-    auto dateTimeTicker = QSharedPointer<QCPAxisTickerDateTime>::create();
-    dateTimeTicker->setTimeZone(QTimeZone::systemTimeZone());
-    dateTimeTicker->setDateTimeFormat("MM-dd\nHH:mm:ss");
+    auto dateTimeTicker = QSharedPointer<HistoryTimeTicker>::create(m_plot->xAxis);
     m_plot->xAxis->setTicker(dateTimeTicker);
 
     m_table = new QTableWidget;
@@ -152,7 +209,7 @@ HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
         m_offset += HistoryQuery::PageSize; queryData();
     });
     connect(m_query, &HistoryQuery::finished, this,
-            [this](int operation, const QVariantList &rows, bool more, const QString &error) {
+            [this](int, const QVariantList &rows, bool more, const QString &error) {
         m_queryButton->setEnabled(true);
         m_startEdit->setEnabled(true); m_endEdit->setEnabled(true); m_sensorCombo->setEnabled(true);
         m_previous->setEnabled(m_offset > 0); m_next->setEnabled(more);
@@ -160,7 +217,6 @@ HistoryDialog::HistoryDialog(const QString &databasePath, QWidget *parent)
             m_pageLabel->setText("查询失败");
             QMessageBox::warning(this, "数据库操作失败", error); return;
         }
-        if (operation == HistoryQuery::ClearAlarms) { m_offset = 0; queryData(); return; }
         showRows(rows);
         m_pageLabel->setText(QString("第 %1 页 · 本页 %2 条（每页最多500条）")
             .arg(m_offset / HistoryQuery::PageSize + 1).arg(rows.size()));
@@ -244,6 +300,15 @@ void HistoryDialog::showRows(const QVariantList &rows)
             hasAnyData = true;
     }
     m_plot->legend->setVisible(hasAnyData);
+    // An empty legend's maximum width is almost zero. Leaving it in the same grid column
+    // would also squeeze the axis rect to its minimum width, piling up the time labels.
+    if (hasAnyData && !m_plot->legend->layout()) {
+        m_plot->plotLayout()->addElement(1, 0, m_plot->legend);
+        m_plot->plotLayout()->setRowStretchFactor(1, 0.001);
+    } else if (!hasAnyData && m_plot->legend->layout() == m_plot->plotLayout()) {
+        m_plot->plotLayout()->take(m_plot->legend);
+        m_plot->plotLayout()->simplify();
+    }
     if (hasAnyData) {
         m_plot->rescaleAxes(true);
         m_plot->xAxis->scaleRange(1.02, m_plot->xAxis->range().center());

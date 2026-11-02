@@ -1,6 +1,6 @@
 # Windows 发布与安装
 
-发布版本：2026.10.31.1。使用 Release 构建，安装包带 Qt、MinGW 运行库、SerialBus/SerialPort 与 SQLite 插件。
+发布版本：2026.11.02.1。使用 Release 构建，安装包带 Qt、MinGW 运行库、SerialBus/SerialPort 与 SQLite 插件。
 
 双击安装包，默认安装至 `D:\温湿度数据采集系统`，创建或更新桌面快捷方式。便携 ZIP 解压后可运行 `温湿度数据采集系统.exe`。新安装从 `config.example.ini` 创建配置；更新保留原 `config.ini`、`data` 和 `logs`。
 
@@ -9,6 +9,14 @@
 复现打包：先执行 `scripts/verify.ps1 -LifecycleCycles 100`，再执行 `python scripts/package.py`。Qt、编译器、CMake、Ninja、7-Zip、WinRAR 路径可由命令行参数覆盖。需要现有 7-Zip 与 WinRAR SFX 模块，不自动安装工具。
 
 产物写入独立 `dist/release-*`，`dist/latest-release.json` 记录路径及哈希。运行目录有源码清单 `release-manifest.json` 和运行文件校验 `SHA256.json`。`install.ps1` 支持 `-InstallDirectory`、`-NoShortcuts`、`-Quiet` 进行隔离安装验证。当前为本地自解压安装器，没有卸载注册项或代码签名；真实硬件测量和长期运行仍按项目验证说明执行。
+
+## 2026-11-02 报警窗口整合与时间刻度修复
+
+主菜单“数据”改为直接打开窗口的“历史查询”入口，移除独立旧报警窗口。报警统一在“区域监控 → 报警处置”查看；同时补充从机地址与触发上下限，保留按区域和历史时间范围查询的能力。时间范围统一转换为UTC查询，未恢复业务报警仍按区域置顶。
+
+启动时在同一事务中升级报警表，将旧 alarm_history 的每条原始记录完整保存到 monitor_alarms.legacy_record，已知字段用于显示；仅在全部迁移成功后删除旧表。失败回滚并保留原记录。新报警只写一份。旧版原始记录在“旧版归档”中只读查看，恢复状态、确认状态、数据来源标为未知，不参与活动报警或配置锁定；兼容双写产生的旧记录也原样归档，不做不可靠的近似去重。
+
+空历史结果不再让空图例占据布局、挤压坐标区。历史横轴按窗口可用宽度和刻度字体自动减少时间标签，短时间范围显示毫秒，长跨度显示年份，避免刻度重叠及秒内重复标签。保留原有曲线线宽、断点和表格精度。
 
 ## 2026-10-15发布修复
 

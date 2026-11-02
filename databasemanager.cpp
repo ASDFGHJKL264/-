@@ -49,7 +49,7 @@ bool DatabaseManager::initialize(QString *errorMessage)
     return executeSchema(errorMessage);
 }
 
-bool DatabaseManager::executeSchema(QString *errorMessage)
+bool DatabaseManager::executeSchema(QString *errorMessage)//数据库建表，历史样本表
 {
     QSqlQuery query(m_database);
     const QStringList statements = {
@@ -63,18 +63,7 @@ bool DatabaseManager::executeSchema(QString *errorMessage)
         "humidity REAL NOT NULL)",
         "CREATE INDEX IF NOT EXISTS idx_history_time ON sensor_history(sample_time)",
         "CREATE INDEX IF NOT EXISTS idx_history_sensor_time "
-        "ON sensor_history(sensor_index, sample_time)",
-        "CREATE TABLE IF NOT EXISTS alarm_history ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "alarm_time TEXT NOT NULL,"
-        "sensor_index INTEGER NOT NULL,"
-        "sensor_name TEXT NOT NULL,"
-        "slave_id INTEGER NOT NULL,"
-        "alarm_type TEXT NOT NULL,"
-        "alarm_value REAL NOT NULL,"
-        "minimum_value REAL NOT NULL,"
-        "maximum_value REAL NOT NULL)",
-        "CREATE INDEX IF NOT EXISTS idx_alarm_time ON alarm_history(alarm_time)"
+        "ON sensor_history(sensor_index, sample_time)"
     };
     for (const QString &statement : statements) {
         if (!query.exec(statement)) {
@@ -109,39 +98,12 @@ bool DatabaseManager::insertSample(const QDateTime &time, int sensorIndex,
     return true;
 }
 
-bool DatabaseManager::insertAlarm(const QDateTime &time, int sensorIndex,
-                                  const QString &sensorName, int slaveId,
-                                  const QString &type, double value,
-                                  double minimum, double maximum,
-                                  QString *errorMessage)
-{
-    QSqlQuery query(m_database);
-    query.prepare("INSERT INTO alarm_history "
-                  "(alarm_time,sensor_index,sensor_name,slave_id,alarm_type,"
-                  "alarm_value,minimum_value,maximum_value) VALUES (?,?,?,?,?,?,?,?)");
-    query.addBindValue(time.toString(Qt::ISODateWithMs));
-    query.addBindValue(sensorIndex);
-    query.addBindValue(sensorName);
-    query.addBindValue(slaveId);
-    query.addBindValue(type);
-    query.addBindValue(value);
-    query.addBindValue(minimum);
-    query.addBindValue(maximum);
-    if (!query.exec()) {
-        if (errorMessage)
-            *errorMessage = query.lastError().text();
-        return false;
-    }
-    return true;
-}
-
 bool DatabaseManager::cleanupOldData(int retentionDays, QString *errorMessage)
 {
     const QString cutoff = QDateTime::currentDateTime().addDays(-retentionDays)
                                .toString(Qt::ISODateWithMs);
     for (const QString &statement : {
-             QString("DELETE FROM sensor_history WHERE sample_time < ?"),
-             QString("DELETE FROM alarm_history WHERE alarm_time < ?")}) {
+             QString("DELETE FROM sensor_history WHERE sample_time < ?")}) {
         QSqlQuery query(m_database);
         query.prepare(statement);
         query.addBindValue(cutoff);

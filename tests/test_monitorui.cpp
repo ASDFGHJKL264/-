@@ -11,12 +11,74 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QJsonDocument>
+#include <QCheckBox>
+#include <QDateTimeEdit>
 #include "databasemanager.h"
 
 class MonitorUiTest : public QObject
 {
     Q_OBJECT
   private slots:
+    void legacyArchiveSharesAlarmWindowWithoutFakeLifecycle()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto path = dir.filePath("legacy-ui.db");
+        {
+            DatabaseManager schema(path);
+            QVERIFY(schema.initialize());
+            auto db = QSqlDatabase::database(schema.connectionName());
+            QSqlQuery q(db);
+            QVERIFY(q.exec("CREATE TABLE alarm_history(id INTEGER PRIMARY KEY,alarm_time TEXT,sensor_index INTEGER,sensor_name TEXT,slave_id INTEGER,alarm_type TEXT,alarm_value REAL,minimum_value REAL,maximum_value REAL)"));
+            QVERIFY(q.exec("INSERT INTO alarm_history VALUES(9,'2020-01-01T08:00:00+08:00',0,'原区域',7,'温度',80,0,60)"));
+        }
+        MonitorService service;
+        service.initialize(path, {});
+        MonitorDialog dialog(&service, {0}, 500);
+        dialog.show();
+        auto *filter = dialog.findChild<QComboBox *>("alarmRecordFilter");
+        auto *alarms = dialog.findChild<QTableWidget *>("businessAlarmTable");
+        QVERIFY(filter && alarms);
+        QTRY_COMPARE(alarms->rowCount(), 0);
+        filter->setCurrentIndex(4);
+        QTRY_COMPARE(alarms->rowCount(), 1);
+        QCOMPARE(alarms->item(0, 2)->text(), QString("温度"));
+        QCOMPARE(alarms->item(0, 6)->text(), QString("未知（旧版归档）"));
+        QCOMPARE(alarms->item(0, 7)->text(), QString("未知（旧版归档）"));
+        QCOMPARE(alarms->item(0, 10)->text(), QString("未知（旧版归档）"));
+        QCOMPARE(alarms->item(0, 11)->text(), QString("7"));
+        QCOMPARE(alarms->item(0, 12)->text(), QString("0"));
+        QCOMPARE(alarms->item(0, 13)->text(), QString("60"));
+        QVERIFY(alarms->item(0, 14)->text().contains("2020-01-01T08:00:00+08:00"));
+        QVERIFY(alarms->item(0, 0)->data(Qt::UserRole).toBool());
+        auto *zone = dialog.findChild<QComboBox *>("alarmZoneFilter");
+        auto *search = dialog.findChild<QPushButton *>("searchAlarmHistory");
+        auto *useTime = dialog.findChild<QCheckBox *>("alarmUseTimeFilter");
+        auto *from = dialog.findChild<QDateTimeEdit *>("alarmTimeFrom");
+        auto *to = dialog.findChild<QDateTimeEdit *>("alarmTimeTo");
+        QVERIFY(zone && search && useTime && from && to);
+        zone->setCurrentIndex(2); // Region 2 has no archived occurrences.
+        search->click();
+        QTRY_COMPARE(alarms->rowCount(), 0);
+        zone->setCurrentIndex(1);
+        const auto occurred = QDateTime::fromString("2020-01-01T00:00:00.000Z", Qt::ISODateWithMs);
+        from->setDateTime(occurred.toLocalTime());
+        to->setDateTime(occurred.toLocalTime());
+        useTime->setChecked(true);
+        search->click();
+        QTRY_COMPARE(alarms->rowCount(), 1); // Same instant in a different timezone, inclusive endpoints.
+        from->setDateTime(occurred.addMSecs(1).toLocalTime());
+        to->setDateTime(occurred.addSecs(1).toLocalTime());
+        search->click();
+        QTRY_COMPARE(alarms->rowCount(), 0);
+        useTime->setChecked(false);
+        search->click();
+        QTRY_COMPARE(alarms->rowCount(), 1);
+        dialog.findChild<QTabWidget *>()->setCurrentIndex(1);
+        QVERIFY(dialog.grab().save("unified-alarm-archive.png"));
+        service.shutdown();
+    }
+
     void initTestCase()
     {
 #ifdef Q_OS_WIN

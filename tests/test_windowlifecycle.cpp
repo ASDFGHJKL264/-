@@ -1,7 +1,9 @@
 #include "mainwindow.h"
 #include "monitoringcontroller.h"
 #include "historydialog.h"
-#include "alarmdialog.h"
+#include "monitordialog.h"
+#include <QMenuBar>
+#include <QAction>
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QPushButton>
@@ -147,9 +149,20 @@ private slots:
             if (i == 0) {
                 QTRY_VERIFY(controller->metrics()["saved"].toULongLong() >= 12);
                 QVERIFY(window->grab().save("main-quality.png"));
-                HistoryDialog history(dir.filePath("data/environment.db"));
-                AlarmDialog alarms(dir.filePath("data/environment.db"));
-                history.show(); alarms.show(); QTest::qWait(100);
+                QAction *historyAction = nullptr;
+                for (auto *action : window->menuBar()->actions()) {
+                    QVERIFY(action->text() != "数据");
+                    QVERIFY(action->text() != "报警记录");
+                    if (action->objectName() == "openHistoryQuery") historyAction = action;
+                }
+                QVERIFY(historyAction && !historyAction->menu());
+                QCOMPARE(historyAction->text(), QString("历史查询"));
+                historyAction->trigger();
+                auto *history = window->findChild<HistoryDialog *>();
+                QVERIFY(history && history->isVisible());
+                MonitorDialog alarms(controller->service(), {0, 1, 2, 3}, 100);
+                alarms.show(); QTest::qWait(100);
+                history->close();
             }
             QElapsedTimer elapsed; elapsed.start();
             controller->shutdown();

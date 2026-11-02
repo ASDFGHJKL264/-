@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-02",
+  "version": "2026.11.02.1",
+  "result": "passed",
+  "command": "scripts/verify.ps1 -LifecycleCycles 100",
+  "ctestTargetsPassed": 7,
+  "ctestSeconds": 31.51,
+  "qtTestPassedEntriesByTarget": {
+    "SensorCoreTests": 17,
+    "MonitorBusinessTests": 11,
+    "MonitorUiTests": 5,
+    "AcquisitionTests": 8,
+    "WindowLifecycleTests": 6,
+    "HistoryPresentationTests": 10,
+    "AlarmMigrationTests": 7
+  },
+  "entryCountsIncludeInitCleanupAndDataRows": true,
+  "lifecycle": {
+    "cycles": 100,
+    "savedSamples": 513,
+    "databaseCountMatchesSavedCount": true,
+    "maximumObservedCloseMs": 16
+  },
+  "alarmMigration": {
+    "legacyOccurrencesChecked": 208,
+    "originalFieldsPreservedInJson": true,
+    "legacyTableDroppedOnlyAfterSuccessfulMigration": true,
+    "injectedFailureRollsBackAndCanRetry": true,
+    "archiveExcludedFromActiveAlarmsAndSourceLocks": true,
+    "existingActiveAlarmCanStillRecover": true,
+    "newAlarmWrittenOnceWithSlaveAddress": true,
+    "archiveRegionAndTimeFilteringChecked": true
+  },
+  "history": {
+    "emptyLegendRemovedFromLayout": true,
+    "adaptiveTimeLabels": true,
+    "largeFontAndWindowResizeChecked": true,
+    "fiveTimeSpansChecked": true,
+    "doubleScalePresentationEntriesPassed": 10
+  },
+  "release": {
+    "archiveIntegrityChecksPassed": true,
+    "isolatedStartupAndGracefulClosePassed": true,
+    "installedPayloadFilesVerified": 49,
+    "executableSha256": "809f8df6e0953cb134eb94a30bdb78cb8a9bc38adede32a967961bd70579d0f3"
+  },
+  "limitations": [
+    "Temporary databases and simulated devices; no physical device or aging test.",
+    "Observed shutdown timing is not a worst-case timing guarantee."
+  ]
+}

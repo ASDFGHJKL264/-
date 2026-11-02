@@ -124,6 +124,89 @@ bool MonitorService::commitTransaction()
     return false;
 }
 
+bool MonitorService::migrateAlarmHistory()
+{
+    if (!beginTransaction())
+        return false;
+    auto rollback = qScopeGuard([this] { m_db.rollback(); });
+    // ALTER and the copy/drop share one transaction: a failed migration leaves the old
+    // table and every record intact. Do not infer missing lifecycle/source information.
+    QSet<QString> columns;
+    {
+        QSqlQuery q(m_db);
+        if (!q.exec("PRAGMA table_info(monitor_alarms)")) {
+            m_error = q.lastError().text();
+            return false;
+        }
+        while (q.next())
+            columns.insert(q.value(1).toString());
+    }
+    if ((!columns.contains("slave_id") &&
+         !execute("ALTER TABLE monitor_alarms ADD COLUMN slave_id INTEGER")) ||
+        (!columns.contains("legacy_record") &&
+         !execute("ALTER TABLE monitor_alarms ADD COLUMN legacy_record TEXT")) ||
+        !execute("DROP INDEX IF EXISTS monitor_alarm_one_active") ||
+        !execute("CREATE UNIQUE INDEX monitor_alarm_one_active ON monitor_alarms(zone,metric) WHERE recovered_at IS NULL AND legacy_record IS NULL"))
+        return false;
+
+    bool hasLegacy = false;
+    {
+        QSqlQuery q(m_db);
+        if (!q.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alarm_history'")) {
+            m_error = q.lastError().text();
+            return false;
+        }
+        hasLegacy = q.next();
+    }
+    if (hasLegacy) {
+        {
+            QSqlQuery q(m_db);
+            if (!q.exec("SELECT * FROM alarm_history ORDER BY rowid")) {
+                m_error = q.lastError().text();
+                return false;
+            }
+            const auto record = q.record();
+            for (const auto &field : {"alarm_time", "sensor_index", "sensor_name", "slave_id",
+                                      "alarm_type", "alarm_value", "minimum_value", "maximum_value"}) {
+                if (record.indexOf(field) < 0) {
+                    m_error = QString("旧版报警缺少字段：%1").arg(field);
+                    return false;
+                }
+            }
+            while (q.next()) {
+                QVariantMap original;
+                for (int i = 0; i < record.count(); ++i)
+                    original.insert(record.fieldName(i), q.value(i));
+                const auto type = original["alarm_type"].toString();
+                const int metric = type == "温度" ? 0 : type == "湿度" ? 1 : -1;
+                const double value = original["alarm_value"].toDouble();
+                const double minimum = original["minimum_value"].toDouble();
+                const double maximum = original["maximum_value"].toDouble();
+                const int direction = value < minimum ? -1 : value > maximum ? 1 : 0;
+                const auto time = QDateTime::fromString(original["alarm_time"].toString(), Qt::ISODateWithMs);
+                const auto raised = time.isValid() ? time.toUTC().toString(Qt::ISODateWithMs)
+                                                  : original["alarm_time"].toString();
+                if (!execute(
+                        "INSERT INTO monitor_alarms(zone,name,metric,direction,value,minimum,maximum,raised_at,simulator,slave_id,legacy_record) VALUES(?,?,?,?,?,?,?,?,-1,?,?)",
+                        {original["sensor_index"], original["sensor_name"], metric, direction,
+                         original["alarm_value"], original["minimum_value"], original["maximum_value"],
+                         raised, original["slave_id"], json(original)}))
+                    return false;
+            }
+            if (q.lastError().isValid()) {
+                m_error = q.lastError().text();
+                return false;
+            }
+        } // Finish the SELECT before changing the table schema.
+        if (!execute("DROP TABLE alarm_history"))
+            return false;
+    }
+    if (!commitTransaction())
+        return false;
+    rollback.dismiss();
+    return true;
+}
+
 void MonitorService::initialize(const QString &path, const QVariantList &defaults)
 {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -153,9 +236,8 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
         "CREATE TABLE IF NOT EXISTS monitor_rules(zone INTEGER PRIMARY KEY,config TEXT NOT NULL)",
         "CREATE TABLE IF NOT EXISTS monitor_tasks(id INTEGER PRIMARY KEY,name TEXT NOT NULL,started_at TEXT NOT NULL,ended_at TEXT,status TEXT NOT NULL,simulator INTEGER NOT NULL,interval_ms INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL DEFAULT 0)",
         "CREATE TABLE IF NOT EXISTS monitor_task_zones(task_id INTEGER NOT NULL REFERENCES monitor_tasks(id),zone INTEGER NOT NULL,config TEXT NOT NULL,samples INTEGER NOT NULL DEFAULT 0,slots INTEGER NOT NULL DEFAULT 0,temp_min REAL,temp_max REAL,hum_min REAL,hum_max REAL,temp_exceeded_ms INTEGER NOT NULL DEFAULT 0,hum_exceeded_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(task_id,zone))",
-        "CREATE TABLE IF NOT EXISTS monitor_alarms(id INTEGER PRIMARY KEY,zone INTEGER NOT NULL,name TEXT NOT NULL,metric INTEGER NOT NULL,direction INTEGER NOT NULL,value REAL NOT NULL,minimum REAL NOT NULL,maximum REAL NOT NULL,raised_at TEXT NOT NULL,ack_at TEXT,operator TEXT,note TEXT,recovered_at TEXT,task_id INTEGER REFERENCES monitor_tasks(id),simulator INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS monitor_alarms(id INTEGER PRIMARY KEY,zone INTEGER NOT NULL,name TEXT NOT NULL,metric INTEGER NOT NULL,direction INTEGER NOT NULL,value REAL NOT NULL,minimum REAL NOT NULL,maximum REAL NOT NULL,raised_at TEXT NOT NULL,ack_at TEXT,operator TEXT,note TEXT,recovered_at TEXT,task_id INTEGER REFERENCES monitor_tasks(id),simulator INTEGER NOT NULL,slave_id INTEGER,legacy_record TEXT)",
         "CREATE INDEX IF NOT EXISTS monitor_alarm_active ON monitor_alarms(zone,metric,recovered_at)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS monitor_alarm_one_active ON monitor_alarms(zone,metric) WHERE recovered_at IS NULL",
         "CREATE INDEX IF NOT EXISTS monitor_alarm_unacknowledged ON monitor_alarms(id DESC) WHERE ack_at IS NULL",
         "CREATE TABLE IF NOT EXISTS monitor_actions(id INTEGER PRIMARY KEY,time TEXT NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL)"};
     for (const auto &sql : schema)
@@ -164,6 +246,11 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
             emit initialized(false);
             return;
         }
+    if (!migrateAlarmHistory()) {
+        fail("旧版报警迁移失败，原记录已保留");
+        emit initialized(false);
+        return;
+    }
     // A prior process cannot continue a monotonic task timeline. Preserve its last committed
     // statistics.
     if (!execute("UPDATE monitor_tasks SET status='interrupted',ended_at=? WHERE status='running'",
@@ -195,7 +282,7 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
         }
     }
     for (const auto &item :
-         rows("SELECT id,zone,metric,direction FROM monitor_alarms WHERE recovered_at IS NULL")) {
+         rows("SELECT id,zone,metric,direction FROM monitor_alarms WHERE recovered_at IS NULL AND legacy_record IS NULL")) {
         auto r = item.toMap();
         int z = r["zone"].toInt(), metric = r["metric"].toInt();
         if (z >= 0 && z < 4 && metric >= 0 && metric < 2) {
@@ -266,7 +353,11 @@ void MonitorService::configure(const QVariantList &rules)
 
 void MonitorService::session(bool active, bool simulator)
 {
-    if (!m_ready) { if (active) emit sessionRejected(); return; }
+    if (!m_ready) {
+        if (active)
+            emit sessionRejected();
+        return;
+    }
     if (active && m_taskId && simulator != m_simulator) {
         emit logMessage("运行中任务不允许切换数据来源", true);
         emit sessionRejected();
@@ -275,7 +366,7 @@ void MonitorService::session(bool active, bool simulator)
     if (active) {
         // Do not let simulated samples recover hardware incidents (or vice versa).
         auto open = rows(
-            "SELECT id FROM monitor_alarms WHERE recovered_at IS NULL AND simulator<>? LIMIT 1",
+            "SELECT id FROM monitor_alarms WHERE recovered_at IS NULL AND legacy_record IS NULL AND simulator<>? LIMIT 1",
             {simulator});
         if (!open.isEmpty()) {
             emit logMessage(
@@ -287,7 +378,8 @@ void MonitorService::session(bool active, bool simulator)
     }
     m_acquiring = active;
     // A rejected start/stop must not relabel an existing task's data source.
-    if (active) m_simulator = simulator;
+    if (active)
+        m_simulator = simulator;
     if (!active)
         for (int i = 0; i < 4; ++i)
             lost(i);
@@ -352,22 +444,14 @@ void MonitorService::sample(int zone, const QString &name, int slave, double t, 
         int key = zone * 2 + change.metric;
         if (change.kind == AlarmTransition::Raised) {
             ok = execute(
-                "INSERT INTO monitor_alarms(zone,name,metric,direction,value,minimum,maximum,raised_at,task_id,simulator) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO monitor_alarms(zone,name,metric,direction,value,minimum,maximum,raised_at,task_id,simulator,slave_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 {zone, r.name, change.metric, change.direction, change.value,
                  change.metric ? r.humMin : r.tempMin, change.metric ? r.humMax : r.tempMax,
                  utcNow(), m_taskZones.contains(zone) && m_taskId ? QVariant(m_taskId) : QVariant(),
-                 m_simulator});
+                 m_simulator, slave});
             auto result = rows("SELECT last_insert_rowid() AS id");
             if (!result.isEmpty())
                 m_alarmIds[key] = result.first().toMap()["id"].toLongLong();
-            // Keep the original alarm history window working as a compatibility view of
-            // occurrences.
-            ok =
-                ok &&
-                execute(
-                    "INSERT INTO alarm_history(alarm_time,sensor_index,sensor_name,slave_id,alarm_type,alarm_value,minimum_value,maximum_value) VALUES(?,?,?,?,?,?,?,?)",
-                    {wall, zone, r.name, slave, change.metric ? "湿度" : "温度", change.value,
-                     change.metric ? r.humMin : r.tempMin, change.metric ? r.humMax : r.tempMax});
         } else {
             ok = execute(
                 "UPDATE monitor_alarms SET recovered_at=? WHERE id=? AND recovered_at IS NULL",
@@ -497,7 +581,7 @@ void MonitorService::acknowledge(qint64 id, const QString &person, const QString
         return;
     }
     QSqlQuery q(m_db);
-    q.prepare("UPDATE monitor_alarms SET ack_at=?,operator=?,note=? WHERE id=? AND ack_at IS NULL");
+    q.prepare("UPDATE monitor_alarms SET ack_at=?,operator=?,note=? WHERE id=? AND ack_at IS NULL AND legacy_record IS NULL");
     q.addBindValue(utcNow());
     q.addBindValue(person.trimmed());
     q.addBindValue(note.trimmed());
@@ -531,7 +615,7 @@ void MonitorService::reloadRecords()
 
 void MonitorService::browseAlarms(int direction, int filter)
 {
-    if (filter >= 0 && filter <= 3 && filter != m_alarmFilter) {
+    if (filter >= 0 && filter <= 4 && filter != m_alarmFilter) {
         m_alarmFilter = filter;
         m_alarmPage = {};
     } else {
@@ -543,6 +627,24 @@ void MonitorService::browseAlarms(int direction, int filter)
 void MonitorService::browseTasks(int direction)
 {
     movePage(m_taskPage, direction);
+    refresh();
+}
+
+void MonitorService::filterAlarmHistory(int zone, const QString &from, const QString &to)
+{
+    if (zone < -1 || zone >= 4)
+        return;
+    const auto start = QDateTime::fromString(from, Qt::ISODateWithMs);
+    const auto end = QDateTime::fromString(to, Qt::ISODateWithMs);
+    if ((!from.isEmpty() || !to.isEmpty()) &&
+        (!start.isValid() || !end.isValid() || start > end)) {
+        emit logMessage("报警查询时间范围无效", true);
+        return;
+    }
+    m_alarmZone = zone;
+    m_alarmFrom = from.isEmpty() ? QString() : start.toUTC().toString(Qt::ISODateWithMs);
+    m_alarmTo = to.isEmpty() ? QString() : end.toUTC().toString(Qt::ISODateWithMs);
+    m_alarmPage = {};
     refresh();
 }
 
@@ -560,11 +662,16 @@ QVariantList MonitorService::alarmRecords()
     // The unique (zone, metric) index bounds normal unrecovered incidents to eight.
     // Pin them separately so an old incident remains visible on every history page.
     QVariantList pinned;
-    if (m_alarmFilter != 3) {
-        QString sql = "SELECT * FROM monitor_alarms WHERE recovered_at IS NULL";
+    if (m_alarmFilter != 3 && m_alarmFilter != 4) {
+        QString sql = "SELECT * FROM monitor_alarms WHERE recovered_at IS NULL AND legacy_record IS NULL";
+        QVariantList args;
+        if (m_alarmZone >= 0) {
+            sql += " AND zone=?";
+            args.append(m_alarmZone);
+        }
         if (m_alarmFilter == 2)
             sql += " AND ack_at IS NULL";
-        pinned = rows(sql + " ORDER BY id DESC LIMIT 8");
+        pinned = rows(sql + " ORDER BY id DESC LIMIT 8", args);
     }
     m_pinnedAlarms = pinned.size();
     m_alarmPage.hasMore = false;
@@ -576,8 +683,19 @@ QVariantList MonitorService::alarmRecords()
         if (!maximum.isEmpty())
             m_alarmPage.snapshotId = maximum.first().toMap()["id"].toLongLong();
     }
-    QString sql = "SELECT * FROM monitor_alarms WHERE recovered_at IS NOT NULL AND id<=?";
+    QString sql = m_alarmFilter == 4
+        ? "SELECT * FROM monitor_alarms WHERE legacy_record IS NOT NULL AND id<=?"
+        : "SELECT * FROM monitor_alarms WHERE legacy_record IS NULL AND recovered_at IS NOT NULL AND id<=?";
     QVariantList args{m_alarmPage.snapshotId};
+    if (m_alarmZone >= 0) {
+        sql += " AND zone=?";
+        args.append(m_alarmZone);
+    }
+    if (!m_alarmFrom.isEmpty()) {
+        sql += " AND raised_at>=? AND raised_at<=?";
+        args.append(m_alarmFrom);
+        args.append(m_alarmTo);
+    }
     if (m_alarmFilter == 2)
         sql += " AND ack_at IS NULL";
     else if (m_alarmFilter == 3)

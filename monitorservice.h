@@ -29,6 +29,7 @@ class MonitorService final : public QObject
     void refresh();
     void reloadRecords();
     void browseAlarms(int direction, int filter = -1);
+    void filterAlarmHistory(int zone, const QString &from = {}, const QString &to = {});
     void browseTasks(int direction);
     void report(qint64 taskId);
     void shutdown();
@@ -45,6 +46,7 @@ class MonitorService final : public QObject
     void configurationLocked(bool locked);
 
   private:
+    bool migrateAlarmHistory();
     void tick();
     bool execute(const QString &sql, const QVariantList &args = {});
     bool persistStats();
@@ -74,7 +76,9 @@ class MonitorService final : public QObject
     QTimer *m_timer = nullptr;
     QString m_error;
     RecordPage m_alarmPage, m_taskPage;
-    int m_alarmFilter = 0; // 0 all, 1 unrecovered, 2 unacknowledged, 3 completed
+    int m_alarmFilter = 0; // 0 business, 1 unrecovered, 2 unacknowledged, 3 completed, 4 legacy archive
     int m_pinnedAlarms = 0;
+    int m_alarmZone = -1;
+    QString m_alarmFrom, m_alarmTo;
     std::unique_ptr<QLockFile> m_lock;
 };
