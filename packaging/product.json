@@ -1,6 +1,6 @@
 {
   "name": "温湿度数据采集系统",
-  "version": "2026.11.02.1",
+  "version": "2026.11.06.1",
   "installDirectory": "D:\\温湿度数据采集系统",
   "applications": [
     {

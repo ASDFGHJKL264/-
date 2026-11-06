@@ -1,6 +1,6 @@
 # Windows 发布与安装
 
-发布版本：2026.11.02.1。使用 Release 构建，安装包带 Qt、MinGW 运行库、SerialBus/SerialPort 与 SQLite 插件。
+发布版本：2026.11.06.1。使用 Release 构建，安装包带 Qt、MinGW 运行库、SerialBus/SerialPort 与 SQLite 插件。
 
 双击安装包，默认安装至 `D:\温湿度数据采集系统`，创建或更新桌面快捷方式。便携 ZIP 解压后可运行 `温湿度数据采集系统.exe`。新安装从 `config.example.ini` 创建配置；更新保留原 `config.ini`、`data` 和 `logs`。
 
@@ -9,6 +9,10 @@
 复现打包：先执行 `scripts/verify.ps1 -LifecycleCycles 100`，再执行 `python scripts/package.py`。Qt、编译器、CMake、Ninja、7-Zip、WinRAR 路径可由命令行参数覆盖。需要现有 7-Zip 与 WinRAR SFX 模块，不自动安装工具。
 
 产物写入独立 `dist/release-*`，`dist/latest-release.json` 记录路径及哈希。运行目录有源码清单 `release-manifest.json` 和运行文件校验 `SHA256.json`。`install.ps1` 支持 `-InstallDirectory`、`-NoShortcuts`、`-Quiet` 进行隔离安装验证。当前为本地自解压安装器，没有卸载注册项或代码签名；真实硬件测量和长期运行仍按项目验证说明执行。
+
+## 2026-11-06 主窗口布局调整
+
+上方左半区显示通信参数及四路传感器读数，右半区显示系统日志；通信按钮单独成行。下方曲线占满宽度，上下区域均分可用高度，取消底部独立日志区。新增1100×860和1600×1000窗口尺寸的布局回归检查；7组CTest测试通过（测试临时目录设于项目build下）。采集、报警及存储业务不变。
 
 ## 2026-11-02 报警窗口整合与时间刻度修复
 

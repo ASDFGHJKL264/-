@@ -11,6 +11,7 @@
 #include <QFontDatabase>
 #include <QMessageBox>
 #include <QDir>
+#include <QGroupBox>
 #include "sensorconfigdialog.h"
 #include <limits>
 
@@ -23,6 +24,30 @@ private slots:
         const auto names = QFontDatabase::applicationFontFamilies(id);
         if (!names.isEmpty()) QApplication::setFont(QFont(names.first(), 10));
 #endif
+    }
+    void overviewLayoutUsesTwoEqualColumns() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        MainWindow window(nullptr, dir.path());
+        window.show();
+        auto *controls = window.findChild<QWidget *>("monitorControls");
+        auto *overview = window.findChild<QWidget *>("monitorOverview");
+        QVERIFY(controls);
+        QVERIFY(overview);
+        auto *logGroup = qobject_cast<QGroupBox *>(window.m_txtLog->parentWidget());
+        QVERIFY(logGroup);
+        for (const QSize size : {QSize(1100, 860), QSize(1600, 1000)}) {
+            window.resize(size);
+            QTest::qWait(100);
+            QVERIFY(qAbs(controls->width() - logGroup->width()) <= 2);
+            QCOMPARE(controls->geometry().top(), logGroup->geometry().top());
+            QCOMPARE(controls->height(), logGroup->height());
+            QVERIFY(window.m_plot->mapTo(&window, QPoint()).y() >=
+                    overview->mapTo(&window, QPoint()).y() + overview->height());
+            for (auto *button : {window.m_btnConnect, window.m_btnDisconnect, window.m_btnSaveCfg})
+                QVERIFY(button->width() >= button->minimumSizeHint().width());
+        }
+        QVERIFY(window.grab().save("main-layout-two-columns.png"));
     }
     void configurationCommitIsTransactional() {
         QTemporaryDir dir;

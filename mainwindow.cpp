@@ -8,7 +8,6 @@
 #include "monitordialog.h"
 #include <QThread>
 #include <QStatusBar>
-#include <QSplitter>
 #include <QSignalBlocker>
 #include <QAbstractItemView>
 #include "serialportpolicy.h"
@@ -143,9 +142,9 @@ void MainWindow::initUI()
     communicationLayout->addWidget(new QLabel("波特率："), 0, 2);
     m_cbxBaud = new QComboBox;
     communicationLayout->addWidget(m_cbxBaud, 0, 3);
-    communicationLayout->addWidget(new QLabel("校验位："), 0, 4);
+    communicationLayout->addWidget(new QLabel("校验位："), 2, 0);
     m_cbxParity = new QComboBox;
-    communicationLayout->addWidget(m_cbxParity, 0, 5);
+    communicationLayout->addWidget(m_cbxParity, 2, 1);
     communicationLayout->addWidget(new QLabel("数据位："), 1, 0);
     m_cbxDataBit = new QComboBox;
     communicationLayout->addWidget(m_cbxDataBit, 1, 1);
@@ -155,9 +154,13 @@ void MainWindow::initUI()
     m_btnConnect = new QPushButton("建立连接");
     m_btnDisconnect = new QPushButton("断开连接");
     m_btnSaveCfg = new QPushButton("保存参数配置");
-    communicationLayout->addWidget(m_btnConnect, 1, 4);
-    communicationLayout->addWidget(m_btnDisconnect, 1, 5);
-    communicationLayout->addWidget(m_btnSaveCfg, 1, 6);
+    auto *connectionButtons = new QHBoxLayout;
+    connectionButtons->addWidget(m_btnConnect);
+    connectionButtons->addWidget(m_btnDisconnect);
+    connectionButtons->addWidget(m_btnSaveCfg);
+    communicationLayout->addLayout(connectionButtons, 3, 0, 1, 4);
+    communicationLayout->setColumnStretch(1, 1);
+    communicationLayout->setColumnStretch(3, 1);
 
     auto *sensorWidget = new QWidget;
     auto *sensorLayout = new QGridLayout(sensorWidget);
@@ -246,21 +249,28 @@ void MainWindow::initUI()
     auto *groupPlot = new QGroupBox("实时温湿度曲线");
     groupPlot->setLayout(plotLayout);
 
+    // Half-width controls and readings on the left; logs use the freed right half.
+    auto *controls = new QWidget;
+    controls->setObjectName("monitorControls");
+    auto *controlsLayout = new QVBoxLayout(controls);
+    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    controlsLayout->setSpacing(6);
+    controlsLayout->addWidget(groupCommunication);
+    controlsLayout->addWidget(sensorWidget, 1);
+    auto *top = new QWidget;
+    top->setObjectName("monitorOverview");
+    auto *topLayout = new QGridLayout(top);
+    topLayout->setContentsMargins(0, 0, 0, 0);
+    topLayout->setHorizontalSpacing(10);
+    topLayout->addWidget(controls, 0, 0);
+    topLayout->addWidget(groupLog, 0, 1);
+    topLayout->setColumnStretch(0, 1);
+    topLayout->setColumnStretch(1, 1);
+    // Share the space previously used by the bottom log panel between both rows.
     auto *mainLayout = new QVBoxLayout;
-    mainLayout->addWidget(groupCommunication);
-    mainLayout->addWidget(sensorWidget);
-    auto *plotLogSplitter = new QSplitter(Qt::Vertical);
-    plotLogSplitter->setObjectName("plotLogSplitter");
-    plotLogSplitter->addWidget(groupPlot);
-    plotLogSplitter->addWidget(groupLog);
-    plotLogSplitter->setChildrenCollapsible(false);
-    plotLogSplitter->setHandleWidth(7);
-    plotLogSplitter->setStretchFactor(0, 5);
-    plotLogSplitter->setStretchFactor(1, 1);
-    plotLogSplitter->setSizes({450, 90});
-    mainLayout->addWidget(plotLogSplitter, 1);
+    mainLayout->addWidget(top, 1);
+    mainLayout->addWidget(groupPlot, 1);
     groupCommunication->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
-    sensorWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     mainLayout->setSpacing(6);
     mainLayout->setContentsMargins(10, 8, 10, 8);
     auto *central = new QWidget;
