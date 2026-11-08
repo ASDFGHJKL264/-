@@ -1,3 +1,4 @@
+#include "zonerulecodec.h"
 #include "monitorcore.h"
 #include "monitorservice.h"
 #include <QtTest>
@@ -8,7 +9,7 @@
 #include <QJsonDocument>
 #include <QSet>
 #include <limits>
-#include "databasemanager.h"
+#include "databasebootstrap.h"
 
 class MonitorBusinessTest : public QObject
 {
@@ -20,7 +21,7 @@ class MonitorBusinessTest : public QObject
         QVERIFY(dir.isValid());
         const auto path = dir.filePath("record-pages.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QString error;
             QVERIFY2(schema.initialize(&error), qPrintable(error));
         }
@@ -28,7 +29,7 @@ class MonitorBusinessTest : public QObject
         for (int i = 0; i < 4; ++i) {
             ZoneRule rule;
             rule.name = QString("区域%1").arg(i + 1);
-            defaults.append(MonitorService::encodeRule(rule));
+            defaults.append(ZoneRuleCodec::encode(rule));
         }
         MonitorService service;
         service.initialize(path, defaults);
@@ -166,7 +167,7 @@ class MonitorBusinessTest : public QObject
         QTemporaryDir dir;
         const auto path = dir.filePath("rollback.db");
         {
-            DatabaseManager schema(path); QString error;
+            DatabaseBootstrap schema(path); QString error;
             QVERIFY(schema.initialize(&error));
         }
         auto db = QSqlDatabase::addDatabase("QSQLITE", "rollback-inspector");
@@ -174,7 +175,7 @@ class MonitorBusinessTest : public QObject
         QVariantList defaults;
         for (int i = 0; i < 4; ++i) {
             ZoneRule r; r.name = QString::number(i); r.holdMs = 0;
-            defaults.append(MonitorService::encodeRule(r));
+            defaults.append(ZoneRuleCodec::encode(r));
         }
         MonitorService service;
         service.initialize(path, defaults);
@@ -325,7 +326,7 @@ class MonitorBusinessTest : public QObject
             r.name = QString("区域%1").arg(i + 1);
             r.holdMs = 0;
             r.recoveryMs = 0;
-            defaults.append(MonitorService::encodeRule(r));
+            defaults.append(ZoneRuleCodec::encode(r));
         }
         MonitorService service;
         QSignalSpy ready(&service, &MonitorService::initialized);
@@ -392,7 +393,7 @@ class MonitorBusinessTest : public QObject
         for (int i = 0; i < 4; ++i) {
             ZoneRule r;
             r.name = QString::number(i);
-            defaults.append(MonitorService::encodeRule(r));
+            defaults.append(ZoneRuleCodec::encode(r));
         }
         QMetaObject::invokeMethod(
             worker,

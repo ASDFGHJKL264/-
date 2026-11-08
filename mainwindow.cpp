@@ -4,7 +4,7 @@
 #include "monitoringcontroller.h"
 #include "asynclogger.h"
 #include <QJsonDocument>
-#include "monitorservice.h"
+#include "monitorcontroller.h"
 #include "monitordialog.h"
 #include <QThread>
 #include <QStatusBar>
@@ -426,7 +426,7 @@ void MainWindow::handleSample(int index, double temperature, double humidity)
 void MainWindow::initializeMonitoring()
 {
     m_controller = new MonitoringController(m_dataDirectory + "/data/environment.db", m_config, this);
-    m_monitor = m_controller->service();
+    m_monitor = m_controller->monitor();
     connect(m_controller, &MonitoringController::logMessage, this, &MainWindow::printLog);
     connect(m_controller, &MonitoringController::ready, this, [this](bool ok) {
         m_monitorReady = ok;
@@ -453,17 +453,17 @@ void MainWindow::initializeMonitoring()
     });
     metricsTimer->start(1000);
 
-    connect(m_monitor, &MonitorService::configurationLocked, this, [this](bool locked) {
+    connect(m_monitor, &MonitorController::configurationLocked, this, [this](bool locked) {
         m_businessLocked = locked;
     });
 
 
-    connect(m_monitor, &MonitorService::taskChanged, this,
+    connect(m_monitor, &MonitorController::taskChanged, this,
             [this](bool active, const QString &name) {
                 m_taskActive = active;
                 statusBar()->showMessage(active ? "监测任务运行中：" + name : "无运行中的监测任务");
             });
-    connect(m_monitor, &MonitorService::statusReady, this,
+    connect(m_monitor, &MonitorController::statusReady, this,
             [this](int i, const QString &name, const QString &state) {
                 const bool enabled = m_config.sensors[i].enabled;
                 const QString shown = !enabled ? "未启用" : !m_collecting ? "采集已停止" : state;

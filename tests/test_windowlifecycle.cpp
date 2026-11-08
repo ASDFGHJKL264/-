@@ -185,7 +185,7 @@ private slots:
                 historyAction->trigger();
                 auto *history = window->findChild<HistoryDialog *>();
                 QVERIFY(history && history->isVisible());
-                MonitorDialog alarms(controller->service(), {0, 1, 2, 3}, 100);
+                MonitorDialog alarms(controller->monitor(), {0, 1, 2, 3}, 100);
                 alarms.show(); QTest::qWait(100);
                 history->close();
             }

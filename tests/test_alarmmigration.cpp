@@ -1,4 +1,5 @@
-#include "databasemanager.h"
+#include "zonerulecodec.h"
+#include "databasebootstrap.h"
 #include "monitorservice.h"
 
 #include <QDateTime>
@@ -55,7 +56,7 @@ QVariantList defaults()
         ZoneRule rule;
         rule.name = QString("区域%1").arg(i + 1);
         rule.holdMs = rule.recoveryMs = 0;
-        result.append(MonitorService::encodeRule(rule));
+        result.append(ZoneRuleCodec::encode(rule));
     }
     return result;
 }
@@ -106,7 +107,7 @@ private slots:
         QVERIFY(directory.isValid());
         const auto path = directory.filePath("new.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QString error;
             QVERIFY2(schema.initialize(&error), qPrintable(error));
             QVERIFY2(schema.cleanupOldData(30, &error), qPrintable(error));
@@ -143,7 +144,7 @@ private slots:
         QVERIFY(addLegacy(inspector, 9999, "压力/未知类型"));
         QVERIFY(inspector.db.commit());
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QString error;
             QVERIFY2(schema.initialize(&error), qPrintable(error));
             QVERIFY2(schema.cleanupOldData(30, &error), qPrintable(error));
@@ -261,7 +262,7 @@ private slots:
         QVERIFY(directory.isValid());
         const auto path = directory.filePath("active.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QVERIFY(schema.initialize());
         }
         Inspector inspector(path);
@@ -299,7 +300,7 @@ private slots:
         QVERIFY(directory.isValid());
         const auto path = directory.filePath("retry.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QVERIFY(schema.initialize());
         }
         Inspector inspector(path);
@@ -334,7 +335,7 @@ private slots:
         QVERIFY(directory.isValid());
         const auto path = directory.filePath("no-id.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QVERIFY(schema.initialize());
         }
         Inspector inspector(path);

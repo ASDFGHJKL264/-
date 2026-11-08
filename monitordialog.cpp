@@ -1,5 +1,6 @@
 #include "monitordialog.h"
-#include "monitorservice.h"
+#include "monitorcontroller.h"
+#include "zonerulecodec.h"
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QLineEdit>
@@ -48,9 +49,9 @@ void restoreSelection(QTableWidget *table, const QString &id)
         }
 }
 } // namespace
-MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled, int interval,
+MonitorDialog::MonitorDialog(MonitorController *controller, const QList<int> &enabled, int interval,
                              QWidget *parent)
-    : QDialog(parent), m_service(service), m_enabled(enabled), m_interval(interval)
+    : QDialog(parent), m_controller(controller), m_enabled(enabled), m_interval(interval)
 {
     setWindowTitle("实验室区域监控 / 报警处置 / 监测任务");
     resize(1160, 650);
@@ -105,11 +106,9 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
                                      "检查名称、上下限和回差：回差必须小于阈值区间的一半。");
                 return;
             }
-            rules.append(MonitorService::encodeRule(r));
+            rules.append(ZoneRuleCodec::encode(r));
         }
-        QMetaObject::invokeMethod(m_service, [s = m_service, rules] {
-            s->configure(rules);
-        });
+        m_controller->configure(rules);
     });
     tabs->addTab(rulesPage, "区域规则");
     auto *alarmPage = new QWidget;
@@ -168,21 +167,15 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
         const int zone = zoneFilter->currentData().toInt();
         const auto start = useTime->isChecked() ? from->dateTime().toString(Qt::ISODateWithMs) : QString();
         const auto end = useTime->isChecked() ? to->dateTime().toString(Qt::ISODateWithMs) : QString();
-        QMetaObject::invokeMethod(m_service, [s = m_service, zone, start, end] {
-            s->filterAlarmHistory(zone, start, end);
-        });
+        m_controller->filterAlarmHistory(zone, start, end);
     });
     connect(m_alarmFilter, &QComboBox::currentIndexChanged, this, [this](int filter) {
-        QMetaObject::invokeMethod(m_service, [s = m_service, filter] {
-            s->browseAlarms(0, filter);
-        });
+        m_controller->browseAlarms(0, filter);
     });
     for (auto *button : {alarmFirst, m_alarmPrevious, m_alarmNext}) {
         const int direction = button == alarmFirst ? 0 : button == m_alarmPrevious ? -1 : 1;
         connect(button, &QPushButton::clicked, this, [this, direction] {
-            QMetaObject::invokeMethod(m_service, [s = m_service, direction] {
-                s->browseAlarms(direction);
-            });
+            m_controller->browseAlarms(direction);
         });
     }
     m_alarms = table({"ID", "区域", "类型", "方向", "发生值", "发生UTC", "确认UTC", "恢复UTC",
@@ -208,9 +201,7 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
         auto note = QInputDialog::getMultiLineText(this, "报警确认", "处理备注：", {}, &ok);
         if (!ok)
             return;
-        QMetaObject::invokeMethod(m_service, [s = m_service, id, person, note] {
-            s->acknowledge(id, person, note);
-        });
+        m_controller->acknowledge(id, person, note);
     });
     tabs->addTab(alarmPage, "报警处置");
     auto *taskPage = new QWidget;
@@ -251,9 +242,7 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
     for (auto *button : {taskFirst, m_taskPrevious, m_taskNext}) {
         const int direction = button == taskFirst ? 0 : button == m_taskPrevious ? -1 : 1;
         connect(button, &QPushButton::clicked, this, [this, direction] {
-            QMetaObject::invokeMethod(m_service, [s = m_service, direction] {
-                s->browseTasks(direction);
-            });
+            m_controller->browseTasks(direction);
         });
     }
     m_tasks = table({"ID", "名称", "开始UTC", "结束UTC", "状态", "数据源", "间隔ms", "持续ms"});
@@ -269,25 +258,19 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
                 zones.append(i);
         const auto name = m_name->text();
         const int interval = m_interval;
-        QMetaObject::invokeMethod(m_service, [s = m_service, name, zones, interval] {
-            s->startTask(name, zones, interval);
-        });
+        m_controller->startTask(name, zones, interval);
     });
     connect(m_finish, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(m_service, [s = m_service] {
-            s->finishTask();
-        });
+        m_controller->finishTask();
     });
     connect(exportButton, &QPushButton::clicked, this, [this] {
         int row = m_tasks->currentRow();
         if (row < 0)
             return;
         auto id = m_tasks->item(row, 0)->text().toLongLong();
-        QMetaObject::invokeMethod(m_service, [s = m_service, id] {
-            s->report(id);
-        });
+        m_controller->report(id);
     });
-    connect(m_service, &MonitorService::reportReady, this, [this](const QString &csv) {
+    connect(m_controller, &MonitorController::reportReady, this, [this](const QString &csv) {
         auto path =
             QFileDialog::getSaveFileName(this, "导出任务报告", "监测任务报告.csv", "CSV (*.csv)");
         if (path.isEmpty())
@@ -307,8 +290,8 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
     auto *reload = new QPushButton("刷新报警 / 任务");
     root->addWidget(reload);
     connect(reload, &QPushButton::clicked, this, &MonitorDialog::refresh);
-    connect(m_service, &MonitorService::viewReady, this, &MonitorDialog::updateView);
-    connect(m_service, &MonitorService::logMessage, this,
+    connect(m_controller, &MonitorController::viewReady, this, &MonitorDialog::updateView);
+    connect(m_controller, &MonitorController::logMessage, this,
             [this](const QString &text, bool warning) {
                 m_hint->setText(text);
                 m_hint->setStyleSheet(warning ? "color:#c62828" : "");
@@ -317,9 +300,7 @@ MonitorDialog::MonitorDialog(MonitorService *service, const QList<int> &enabled,
 }
 void MonitorDialog::refresh()
 {
-    QMetaObject::invokeMethod(m_service, [s = m_service] {
-        s->reloadRecords();
-    });
+    m_controller->reloadRecords();
 }
 void MonitorDialog::updateView(const QVariantMap &v)
 {
@@ -330,7 +311,7 @@ void MonitorDialog::updateView(const QVariantMap &v)
     if (!m_loaded) {
         auto rules = v["rules"].toList();
         for (int i = 0; i < qMin(4, int(rules.size())); ++i) {
-            auto r = MonitorService::decodeRule(rules[i].toMap());
+            auto r = ZoneRuleCodec::decode(rules[i].toMap());
             qobject_cast<QLineEdit *>(m_rules->cellWidget(i, 1))->setText(r.name);
             qobject_cast<QCheckBox *>(m_rules->cellWidget(i, 2))->setChecked(r.monitored);
             double values[] = {r.tempMin, r.tempMax,        r.humMin,

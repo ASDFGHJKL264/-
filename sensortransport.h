@@ -5,6 +5,7 @@
 
 // Asynchronous transport boundary; production and injected test transports
 // obey the same request-id contract. No QWidget or database dependency.
+//这里的基类指的是通信接口类
 class SensorTransport : public QObject {
     Q_OBJECT
 public:
@@ -19,7 +20,7 @@ signals:
     void completed(quint64 request, bool ok, double temperature, double humidity,
                    const QString &error);
 };
-
+//这里的类是针对modbus通信专门造的类
 class RtuTransport final : public SensorTransport {
     Q_OBJECT
 public:

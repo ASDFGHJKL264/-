@@ -15,7 +15,9 @@ qt_add_library(SensorRuntime STATIC
     sensortransport.h sensortransport.cpp
     acquisitioncontroller.h acquisitioncontroller.cpp
     monitoringcontroller.h monitoringcontroller.cpp
-    databasemanager.h databasemanager.cpp
+    databasebootstrap.h databasebootstrap.cpp
+    zonerulecodec.h zonerulecodec.cpp taskreport.h taskreport.cpp
+    monitorcontroller.h monitorcontroller.cpp
     monitorcore.h monitorcore.cpp monitorservice.h monitorservice.cpp
     asynclogger.h asynclogger.cpp historyquery.h historyquery.cpp)
 target_include_directories(SensorRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

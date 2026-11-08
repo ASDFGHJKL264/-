@@ -1,5 +1,6 @@
+#include "zonerulecodec.h"
 #include "monitoringcontroller.h"
-#include "databasemanager.h"
+#include "databasebootstrap.h"
 #include <QCoreApplication>
 #include <QEvent>
 
@@ -8,6 +9,7 @@ MonitoringController::MonitoringController(const QString &path, const AppConfig 
     : QObject(parent), m_acquisition(nullptr, transport), m_service(new MonitorService)
 {
     m_service->moveToThread(&m_thread);
+    m_monitor = new MonitorController(m_service, this);
     connect(&m_thread, &QThread::finished, m_service, &QObject::deleteLater);
     connect(m_service, &MonitorService::initialized, this, [this](bool ok) {
         if (m_shuttingDown)
@@ -48,13 +50,13 @@ MonitoringController::MonitoringController(const QString &path, const AppConfig 
         r.tempHysteresis = qMin(1.0, (r.tempMax - r.tempMin) / 4);
         r.humHysteresis = qMin(2.0, (r.humMax - r.humMin) / 4);
         r.staleMs = qBound(5000, defaults.pollIntervalMs * 3, 600000);
-        rules.append(MonitorService::encodeRule(r));
+        rules.append(ZoneRuleCodec::encode(r));
     }
     m_thread.start();
     QMetaObject::invokeMethod(m_service, [s = m_service, path, rules] {
         QString error;
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             if (!schema.initialize(&error)) {
                 emit s->logMessage("数据库初始化失败：" + error, true);
                 emit s->initialized(false);
@@ -87,6 +89,7 @@ void MonitoringController::shutdown()
 {
     if (m_shuttingDown) return;
     m_shuttingDown = true;
+    m_monitor->deactivate();
     if (!m_thread.isRunning())
         return;
     stop();

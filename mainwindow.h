@@ -13,7 +13,7 @@
 #include <QTextEdit>
 #include <QTimer>
 
-class MonitorService;
+class MonitorController;
 class MonitoringController;
 class AsyncLogger;
 class QGroupBox;
@@ -69,7 +69,7 @@ class MainWindow final : public QMainWindow
     AsyncLogger *m_logger = nullptr;
     bool m_plotPaused = false;
     qint64 m_sampleSequence = 0;
-    MonitorService *m_monitor = nullptr;
+    MonitorController *m_monitor = nullptr;
     QGroupBox *m_sensorBoxes[4]{};
     QPointer<MonitorDialog> m_monitorDialog;
     bool m_monitorReady = false, m_taskActive = false, m_collecting = false;

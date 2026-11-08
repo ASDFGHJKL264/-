@@ -38,6 +38,50 @@ static AppConfig config()
 class AcquisitionTests : public QObject {
     Q_OBJECT
 private slots:
+    void businessCommandsUseWorkerAndStopAfterShutdown() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        auto c = config();
+        c.simulatorEnabled = true;
+        MonitoringController runtime(dir.filePath("commands.db"), c);
+        auto *commands = runtime.monitor();
+        QSignalSpy ready(&runtime, &MonitoringController::ready);
+        QSignalSpy views(commands, &MonitorController::viewReady);
+        QSignalSpy tasks(commands, &MonitorController::taskChanged);
+        QSignalSpy reports(commands, &MonitorController::reportReady);
+        QTRY_COMPARE(ready.size(), 1);
+        QVERIFY(ready.first()[0].toBool());
+        QTRY_VERIFY(!views.isEmpty());
+        auto rules = views.last()[0].toMap()["rules"].toList();
+        auto rule = rules[0].toMap();
+        rule["name"] = "configured through controller";
+        rules[0] = rule;
+        commands->configure(rules);
+        QTRY_COMPARE(views.last()[0].toMap()["rules"].toList()[0].toMap()["name"].toString(),
+                     QString("configured through controller"));
+        QVERIFY(runtime.start(c));
+        commands->startTask("=task,\"A\"\nB", {0}, c.pollIntervalMs);
+        QTRY_COMPARE(tasks.size(), 1);
+        QVERIFY(tasks.first()[0].toBool());
+        QTRY_VERIFY(!views.last()[0].toMap()["tasks"].toList().isEmpty());
+        const auto id = views.last()[0].toMap()["tasks"].toList()[0].toMap()["id"].toLongLong();
+        commands->finishTask();
+        QTRY_COMPARE(tasks.size(), 2);
+        QVERIFY(!tasks.last()[0].toBool());
+        commands->report(id);
+        QTRY_COMPARE(reports.size(), 1);
+        QVERIFY(reports.first()[0].toString().contains("\"'=task,\"\"A\"\"\nB\""));
+        runtime.shutdown();
+        QCoreApplication::processEvents();
+        const auto count = views.size();
+        commands->reloadRecords();
+        commands->startTask("after shutdown", {0}, 100);
+        commands->report(id);
+        QCoreApplication::processEvents();
+        QCOMPARE(views.size(), count);
+        QCOMPARE(tasks.size(), 2);
+        QCOMPARE(reports.size(), 1);
+    }
     void immediateShutdownCannotRestart() {
         QTemporaryDir dir;
         MonitoringController controller(dir.filePath("early.db"), config(), nullptr, new FakeTransport);

@@ -15,8 +15,6 @@ class MonitorService final : public QObject
     {
     }
     static qint64 monotonicMs();
-    static QVariantMap encodeRule(const ZoneRule &r);
-    static ZoneRule decodeRule(const QVariantMap &m);
     void initialize(const QString &path, const QVariantList &defaults);
     void configure(const QVariantList &rules);
     void session(bool active, bool simulator);
@@ -46,7 +44,6 @@ class MonitorService final : public QObject
     void configurationLocked(bool locked);
 
   private:
-    bool migrateAlarmHistory();
     void tick();
     bool execute(const QString &sql, const QVariantList &args = {});
     bool persistStats();

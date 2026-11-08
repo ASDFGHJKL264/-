@@ -1,12 +1,12 @@
 # 温湿度项目整改与验证
 
-最新修复与实测日期为2026-11-02，见末节；前几轮的数字保留为历史记录，不代表最新报告。
+最新整改与实测日期为2026-11-08，见末节；前几轮的数字保留为历史记录，不代表最新报告。
 
 ## 范围与架构
 
 本次保留原硬件温度编码（原始值大于等于10000时按设备规则表示负温度）、0.1倍率、原INI键名及正式数据路径。未连接或改写真实设备，未使用正式数据库进行测试。用户原有的报警颜色调整及已删除的说明文件保持原状态。
 
-依赖关系：`MainWindow → MonitoringController → AcquisitionController → SensorTransport`；`MonitoringController → MonitorService（数据库线程）`。历史窗口通过`HistoryQuery`查询，界面日志通过`AsyncLogger`落盘。配置独立为`ConfigStore`。CMake拆为不依赖Widgets的SensorRuntime和界面模块SensorWidgets，测试直接链接生产模块。
+依赖关系：`MainWindow → MonitoringController → AcquisitionController → SensorTransport`；`MonitoringController → MonitorService（数据库线程）`。业务窗口通过 `MonitorController` 提交命令并接收结果，由它安排跨线程调用。历史窗口通过`HistoryQuery`查询，界面日志通过`AsyncLogger`落盘。配置独立为`ConfigStore`。CMake拆为不依赖Widgets的SensorRuntime和界面模块SensorWidgets，测试直接链接生产模块。
 
 主窗口不再包含Modbus读请求、轮询定时器、原始数值解码、存储队列管理、INI键读写或文件日志轮转。界面刷新、用户操作和对话框管理仍属于主窗口职责。
 
@@ -100,3 +100,15 @@
 新增 AlarmMigrationTests 覆盖208条旧记录逐字段保真、多页可达、未知类型、无显式ID旧表、跨30天保留、已有活动报警与旧索引升级、第二条迁移失败时整体回滚及重试、重启不重复迁移、新报警只写一份且带实际地址。界面测试覆盖归档未知状态显示、实际区域/时间查询按钮、同一瞬间不同时区与毫秒边界。历史测试覆盖空结果坐标宽度、五组时间跨度、大字体及窗口往返缩放后标签间距；另以2倍缩放运行同一历史专项，10项全部通过。
 
 报告位于 build-quality/test-results.xml、各 *-results.txt；截图包括 main-quality.png、unified-alarm-archive.png、history-time-axis-*.png。首次沙箱内运行因临时目录权限失败，以上结果来自正常权限重跑。只使用模拟器及临时数据库，不以这些测试代替真实硬件或长期运行验收。
+
+## 2026-11-08：模块职责与界面调用边界
+
+将旧 DatabaseManager 改为 DatabaseBootstrap，移除无调用的独立采样写入接口，并把业务建表和旧报警迁移从 MonitorService 提取到该类。迁移仍在调用者的后台数据库连接中，以同一事务完成复制、索引更新和删除旧表。运行期采样、报警和任务统计仍由 MonitorService 在同一事务内提交。
+
+新增 TaskReport，仅根据任务/区域快照生成CSV；新增 ZoneRuleCodec，集中转换 ZoneRule 与 QVariantMap。新增 MonitorController，由 MonitoringController 持有，统一业务命令的跨线程派发和结果通知；主窗口、业务窗口不再直接依赖 MonitorService 或自行安排跨线程调用。关闭时先停用命令入口，再排空已接收的后台操作。
+
+新增真实后台线程回归，覆盖通过控制器修改规则、启动/结束任务、带逗号/双引号/换行和公式前缀的报告名称，以及关闭后继续调用控制器。原界面、历史、事务回滚和报警迁移测试同步使用拆分后的生产模块。
+
+本机 Windows、Qt6.10.3、MinGW13.1 执行 `./scripts/verify.ps1 -LifecycleCycles 100`，应用构建成功，7组CTest全部通过，总耗时32.76秒；100轮模拟采集/查询/关闭保存523条，落库数量与保存计数一致，最大观察关闭27ms。本轮未重跑额外的高DPI专项，构建目录中既有高DPI报告不属于本轮结果。
+
+首次测试因沙箱临时目录访问被拒而失败；随后在当前PowerShell进程内将 TEMP、TMP 指向项目的 `build-quality/test-temp` 后重跑通过，无需改变系统设置。测试仅使用临时数据库和模拟器，没有使用正式数据或真实设备。报告位于 `build-quality/test-results.xml` 和各组 `*-results.txt`。

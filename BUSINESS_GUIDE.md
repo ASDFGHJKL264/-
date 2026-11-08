@@ -60,7 +60,11 @@
 | 文件 | 职责 |
 |---|---|
 | monitorcore.h/.cpp | 不依赖界面/数据库的区域状态机、任务统计 |
-| monitorservice.h/.cpp | 后台线程数据库操作、规则保存、报警处置、任务与CSV报告 |
+| monitorservice.h/.cpp | 后台线程业务流程、运行期SQL事务、规则保存、报警处置、任务与报告数据读取 |
+| databasebootstrap.h/.cpp | 原始采样表初始化/清理、业务表结构及旧报警事务迁移；不提供运行期采样写入入口 |
+| taskreport.h/.cpp | 将任务和区域统计快照格式化为CSV，不访问数据库 |
+| zonerulecodec.h/.cpp | ZoneRule与QVariantMap的共享转换，不依赖业务服务 |
+| monitorcontroller.h/.cpp | 面向窗口的业务命令和结果通知，统一跨线程调用，不拥有后台服务 |
 | monitordialog.h/.cpp | 三个业务分页和交互 |
 | mainwindow.h/.cpp | 界面布局、显示与用户操作；不直接执行串口请求、SQL或文件日志写入 |
 | appconfig.h/.cpp | 配置模型、INI读写、参数校验，保留原配置键名 |
@@ -71,6 +75,10 @@
 | asynclogger.h/.cpp | 有界文件日志队列与后台轮转 |
 | tests/test_monitorbusiness.cpp | 状态机、缺失统计、数据库持久化及线程退出测试 |
 | tests/test_monitorui.cpp | 业务窗口、开始/结束任务及界面渲染测试 |
+
+业务窗口和主窗口通过 `MonitorController` 接收状态、提交业务操作，`MonitoringController` 持有该控制器并管理采集及后台服务生命周期。窗口不直接取得后台服务或安排跨线程调用。关闭时控制器先停止接收新的业务命令，再排空后台已接收操作。
+
+`MonitorService` 继续负责业务流程和运行期SQL事务；采样、报警变化和任务统计仍在同一连接、同一事务内提交。`DatabaseBootstrap` 仅处理启动建表、旧报警迁移及旧采样清理；旧 `DatabaseManager` 和未使用的独立采样写入入口已移除。文件仍按现有目录组织。
 
 ## 验证和边界
 

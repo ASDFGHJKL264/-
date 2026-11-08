@@ -1,11 +1,12 @@
 #include "monitorservice.h"
+#include "databasebootstrap.h"
+#include "zonerulecodec.h"
+#include "taskreport.h"
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QSqlRecord>
 #include <QDateTime>
 #include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
 #include <QUuid>
 #include <QSet>
 #include <QElapsedTimer>
@@ -24,49 +25,12 @@ QString json(const QVariantMap &m)
 {
     return QString::fromUtf8(QJsonDocument::fromVariant(m).toJson(QJsonDocument::Compact));
 }
-QString csvText(QString s)
-{
-    if (!s.isEmpty() && (QString("=+-@").contains(s.front()) || s.front().isSpace()))
-        s.prepend('\'');
-    s.replace('"', "\"\"");
-    return '"' + s + '"';
-}
 } // namespace
 qint64 MonitorService::monotonicMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
-}
-QVariantMap MonitorService::encodeRule(const ZoneRule &r)
-{
-    return {{"name", r.name},
-            {"monitored", r.monitored},
-            {"tempMin", r.tempMin},
-            {"tempMax", r.tempMax},
-            {"humMin", r.humMin},
-            {"humMax", r.humMax},
-            {"tempHysteresis", r.tempHysteresis},
-            {"humHysteresis", r.humHysteresis},
-            {"holdMs", r.holdMs},
-            {"recoveryMs", r.recoveryMs},
-            {"staleMs", r.staleMs}};
-}
-ZoneRule MonitorService::decodeRule(const QVariantMap &m)
-{
-    ZoneRule r;
-    r.name = m.value("name").toString();
-    r.monitored = m.value("monitored", true).toBool();
-    r.tempMin = m.value("tempMin", -20).toDouble();
-    r.tempMax = m.value("tempMax", 60).toDouble();
-    r.humMin = m.value("humMin", 10).toDouble();
-    r.humMax = m.value("humMax", 90).toDouble();
-    r.tempHysteresis = m.value("tempHysteresis", 1).toDouble();
-    r.humHysteresis = m.value("humHysteresis", 2).toDouble();
-    r.holdMs = m.value("holdMs", 10000).toInt();
-    r.recoveryMs = m.value("recoveryMs", 5000).toInt();
-    r.staleMs = m.value("staleMs", 5000).toInt();
-    return r;
 }
 bool MonitorService::execute(const QString &sql, const QVariantList &args)
 {
@@ -124,89 +88,6 @@ bool MonitorService::commitTransaction()
     return false;
 }
 
-bool MonitorService::migrateAlarmHistory()
-{
-    if (!beginTransaction())
-        return false;
-    auto rollback = qScopeGuard([this] { m_db.rollback(); });
-    // ALTER and the copy/drop share one transaction: a failed migration leaves the old
-    // table and every record intact. Do not infer missing lifecycle/source information.
-    QSet<QString> columns;
-    {
-        QSqlQuery q(m_db);
-        if (!q.exec("PRAGMA table_info(monitor_alarms)")) {
-            m_error = q.lastError().text();
-            return false;
-        }
-        while (q.next())
-            columns.insert(q.value(1).toString());
-    }
-    if ((!columns.contains("slave_id") &&
-         !execute("ALTER TABLE monitor_alarms ADD COLUMN slave_id INTEGER")) ||
-        (!columns.contains("legacy_record") &&
-         !execute("ALTER TABLE monitor_alarms ADD COLUMN legacy_record TEXT")) ||
-        !execute("DROP INDEX IF EXISTS monitor_alarm_one_active") ||
-        !execute("CREATE UNIQUE INDEX monitor_alarm_one_active ON monitor_alarms(zone,metric) WHERE recovered_at IS NULL AND legacy_record IS NULL"))
-        return false;
-
-    bool hasLegacy = false;
-    {
-        QSqlQuery q(m_db);
-        if (!q.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alarm_history'")) {
-            m_error = q.lastError().text();
-            return false;
-        }
-        hasLegacy = q.next();
-    }
-    if (hasLegacy) {
-        {
-            QSqlQuery q(m_db);
-            if (!q.exec("SELECT * FROM alarm_history ORDER BY rowid")) {
-                m_error = q.lastError().text();
-                return false;
-            }
-            const auto record = q.record();
-            for (const auto &field : {"alarm_time", "sensor_index", "sensor_name", "slave_id",
-                                      "alarm_type", "alarm_value", "minimum_value", "maximum_value"}) {
-                if (record.indexOf(field) < 0) {
-                    m_error = QString("旧版报警缺少字段：%1").arg(field);
-                    return false;
-                }
-            }
-            while (q.next()) {
-                QVariantMap original;
-                for (int i = 0; i < record.count(); ++i)
-                    original.insert(record.fieldName(i), q.value(i));
-                const auto type = original["alarm_type"].toString();
-                const int metric = type == "温度" ? 0 : type == "湿度" ? 1 : -1;
-                const double value = original["alarm_value"].toDouble();
-                const double minimum = original["minimum_value"].toDouble();
-                const double maximum = original["maximum_value"].toDouble();
-                const int direction = value < minimum ? -1 : value > maximum ? 1 : 0;
-                const auto time = QDateTime::fromString(original["alarm_time"].toString(), Qt::ISODateWithMs);
-                const auto raised = time.isValid() ? time.toUTC().toString(Qt::ISODateWithMs)
-                                                  : original["alarm_time"].toString();
-                if (!execute(
-                        "INSERT INTO monitor_alarms(zone,name,metric,direction,value,minimum,maximum,raised_at,simulator,slave_id,legacy_record) VALUES(?,?,?,?,?,?,?,?,-1,?,?)",
-                        {original["sensor_index"], original["sensor_name"], metric, direction,
-                         original["alarm_value"], original["minimum_value"], original["maximum_value"],
-                         raised, original["slave_id"], json(original)}))
-                    return false;
-            }
-            if (q.lastError().isValid()) {
-                m_error = q.lastError().text();
-                return false;
-            }
-        } // Finish the SELECT before changing the table schema.
-        if (!execute("DROP TABLE alarm_history"))
-            return false;
-    }
-    if (!commitTransaction())
-        return false;
-    rollback.dismiss();
-    return true;
-}
-
 void MonitorService::initialize(const QString &path, const QVariantList &defaults)
 {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -232,22 +113,8 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
         emit initialized(false);
         return;
     }
-    const QStringList schema = {
-        "CREATE TABLE IF NOT EXISTS monitor_rules(zone INTEGER PRIMARY KEY,config TEXT NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS monitor_tasks(id INTEGER PRIMARY KEY,name TEXT NOT NULL,started_at TEXT NOT NULL,ended_at TEXT,status TEXT NOT NULL,simulator INTEGER NOT NULL,interval_ms INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL DEFAULT 0)",
-        "CREATE TABLE IF NOT EXISTS monitor_task_zones(task_id INTEGER NOT NULL REFERENCES monitor_tasks(id),zone INTEGER NOT NULL,config TEXT NOT NULL,samples INTEGER NOT NULL DEFAULT 0,slots INTEGER NOT NULL DEFAULT 0,temp_min REAL,temp_max REAL,hum_min REAL,hum_max REAL,temp_exceeded_ms INTEGER NOT NULL DEFAULT 0,hum_exceeded_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(task_id,zone))",
-        "CREATE TABLE IF NOT EXISTS monitor_alarms(id INTEGER PRIMARY KEY,zone INTEGER NOT NULL,name TEXT NOT NULL,metric INTEGER NOT NULL,direction INTEGER NOT NULL,value REAL NOT NULL,minimum REAL NOT NULL,maximum REAL NOT NULL,raised_at TEXT NOT NULL,ack_at TEXT,operator TEXT,note TEXT,recovered_at TEXT,task_id INTEGER REFERENCES monitor_tasks(id),simulator INTEGER NOT NULL,slave_id INTEGER,legacy_record TEXT)",
-        "CREATE INDEX IF NOT EXISTS monitor_alarm_active ON monitor_alarms(zone,metric,recovered_at)",
-        "CREATE INDEX IF NOT EXISTS monitor_alarm_unacknowledged ON monitor_alarms(id DESC) WHERE ack_at IS NULL",
-        "CREATE TABLE IF NOT EXISTS monitor_actions(id INTEGER PRIMARY KEY,time TEXT NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL)"};
-    for (const auto &sql : schema)
-        if (!execute(sql)) {
-            fail("业务表初始化失败");
-            emit initialized(false);
-            return;
-        }
-    if (!migrateAlarmHistory()) {
-        fail("旧版报警迁移失败，原记录已保留");
+    if (!DatabaseBootstrap::initializeMonitoring(m_db, &m_error)) {
+        fail("业务表初始化或旧版报警迁移失败，原记录已保留");
         emit initialized(false);
         return;
     }
@@ -267,7 +134,7 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
                 : QJsonDocument::fromJson(stored.first().toMap()["config"].toString().toUtf8())
                       .toVariant()
                       .toMap();
-        auto rule = decodeRule(map);
+        auto rule = ZoneRuleCodec::decode(map);
         if (!rule.valid()) {
             rule = ZoneRule{};
             rule.name = QString("区域%1").arg(i + 1);
@@ -275,7 +142,7 @@ void MonitorService::initialize(const QString &path, const QVariantList &default
         }
         m_zones[i].rule = rule;
         if (!execute("INSERT OR REPLACE INTO monitor_rules(zone,config) VALUES(?,?)",
-                     {i, json(encodeRule(rule))})) {
+                     {i, json(ZoneRuleCodec::encode(rule))})) {
             fail("默认区域规则持久化失败");
             emit initialized(false);
             return;
@@ -312,14 +179,14 @@ void MonitorService::configure(const QVariantList &rules)
     std::array<ZoneRule, 4> proposed;
     QSet<QString> names;
     for (int i = 0; i < 4; ++i) {
-        proposed[i] = decodeRule(rules[i].toMap());
+        proposed[i] = ZoneRuleCodec::decode(rules[i].toMap());
         if (!proposed[i].valid() || names.contains(proposed[i].name)) {
             emit logMessage("区域名称不可重复，阈值/回差/时间参数必须有效", true);
             return;
         }
         names.insert(proposed[i].name);
         if (m_zones[i].channels[0].active || m_zones[i].channels[1].active) {
-            if (encodeRule(proposed[i]) != encodeRule(m_zones[i].rule)) {
+            if (ZoneRuleCodec::encode(proposed[i]) != ZoneRuleCodec::encode(m_zones[i].rule)) {
                 emit logMessage("存在未恢复报警的区域不能修改规则", true);
                 return;
             }
@@ -333,7 +200,7 @@ void MonitorService::configure(const QVariantList &rules)
     bool ok = true;
     for (int i = 0; i < 4; ++i)
         ok = ok && execute("INSERT OR REPLACE INTO monitor_rules(zone,config) VALUES(?,?)",
-                           {i, json(encodeRule(proposed[i]))});
+                           {i, json(ZoneRuleCodec::encode(proposed[i]))});
     ok = ok && execute("INSERT INTO monitor_actions(time,kind,detail) VALUES(?,'configure',?)",
                        {utcNow(), QString::fromUtf8(QJsonDocument::fromVariant(rules).toJson(
                                       QJsonDocument::Compact))});
@@ -531,7 +398,7 @@ void MonitorService::startTask(const QString &name, const QList<int> &zones, int
     auto id = result.isEmpty() ? 0 : result.first().toMap()["id"].toLongLong();
     for (int z : zones)
         ok = ok && execute("INSERT INTO monitor_task_zones(task_id,zone,config) VALUES(?,?,?)",
-                           {id, z, json(encodeRule(m_zones[z].rule))});
+                           {id, z, json(ZoneRuleCodec::encode(m_zones[z].rule))});
     if (!ok || !commitTransaction()) {
         m_db.rollback();
         fail("启动任务失败");
@@ -749,7 +616,7 @@ void MonitorService::refresh()
     emit configurationLocked(locked);
     QVariantList rules;
     for (const auto &z : m_zones)
-        rules.append(encodeRule(z.rule));
+        rules.append(ZoneRuleCodec::encode(z.rule));
     const auto alarms = alarmRecords();
     const auto tasks = taskRecords();
     auto alarmPage = pageInfo(m_alarmPage);
@@ -775,42 +642,8 @@ void MonitorService::report(qint64 id)
         emit logMessage("请先结束任务再导出最终报告", true);
         return;
     }
-    QString csv =
-        QString(QChar(0xfeff)) +
-        QStringLiteral(
-            "任务ID,任务名称,状态,数据源,开始UTC,结束UTC,区域,有效样本数,计划时间槽,有效时间槽,缺失时间槽,覆盖率%,最低温度,最高温度,最低湿度,最高湿度,温度超限估算秒,湿度超限估算秒,规则快照\r\n");
-    const auto duration = t["elapsed_ms"].toLongLong();
-    const auto interval = qMax(1, t["interval_ms"].toInt());
-    for (const auto &item :
-         rows("SELECT * FROM monitor_task_zones WHERE task_id=? ORDER BY zone", {id})) {
-        auto r = item.toMap();
-        auto rule = QJsonDocument::fromJson(r["config"].toString().toUtf8()).toVariant().toMap();
-        auto valid = r["slots"].toLongLong();
-        auto expected = qMax(valid, qMax<qint64>(1, (duration + interval - 1) / interval));
-        QStringList fields = {QString::number(id),
-                              csvText(t["name"].toString()),
-                              csvText(t["status"].toString()),
-                              t["simulator"].toBool() ? "模拟" : "硬件",
-                              csvText(t["started_at"].toString()),
-                              csvText(t["ended_at"].toString()),
-                              csvText(rule["name"].toString()),
-                              r["samples"].toString(),
-                              QString::number(expected),
-                              QString::number(valid),
-                              QString::number(expected - valid),
-                              QString::number(valid * 100.0 / expected, 'f', 2),
-                              r["temp_min"].toString(),
-                              r["temp_max"].toString(),
-                              r["hum_min"].toString(),
-                              r["hum_max"].toString(),
-                              QString::number(r["temp_exceeded_ms"].toLongLong() / 1000.0, 'f', 3),
-                              QString::number(r["hum_exceeded_ms"].toLongLong() / 1000.0, 'f', 3),
-                              csvText(r["config"].toString())};
-        csv += fields.join(',') + "\r\n";
-    }
-    csv +=
-        "\r\n说明,缺失时间槽不计为正常；超限时长采用末值保持且最多保持至失效阈值，仅为估算；中断任务统计截止最后持久化点。\r\n";
-    emit reportReady(csv);
+    const auto zones = rows("SELECT * FROM monitor_task_zones WHERE task_id=? ORDER BY zone", {id});
+    emit reportReady(TaskReport::toCsv(t, zones));
 }
 void MonitorService::shutdown()
 {

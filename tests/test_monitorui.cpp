@@ -1,3 +1,5 @@
+#include "monitorcontroller.h"
+#include "zonerulecodec.h"
 #include "monitordialog.h"
 #include "monitorservice.h"
 #include <QtTest>
@@ -13,7 +15,7 @@
 #include <QJsonDocument>
 #include <QCheckBox>
 #include <QDateTimeEdit>
-#include "databasemanager.h"
+#include "databasebootstrap.h"
 
 class MonitorUiTest : public QObject
 {
@@ -25,7 +27,7 @@ class MonitorUiTest : public QObject
         QVERIFY(dir.isValid());
         const auto path = dir.filePath("legacy-ui.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QVERIFY(schema.initialize());
             auto db = QSqlDatabase::database(schema.connectionName());
             QSqlQuery q(db);
@@ -33,8 +35,9 @@ class MonitorUiTest : public QObject
             QVERIFY(q.exec("INSERT INTO alarm_history VALUES(9,'2020-01-01T08:00:00+08:00',0,'原区域',7,'温度',80,0,60)"));
         }
         MonitorService service;
+        MonitorController uiController(&service);
         service.initialize(path, {});
-        MonitorDialog dialog(&service, {0}, 500);
+        MonitorDialog dialog(&uiController, {0}, 500);
         dialog.show();
         auto *filter = dialog.findChild<QComboBox *>("alarmRecordFilter");
         auto *alarms = dialog.findChild<QTableWidget *>("businessAlarmTable");
@@ -108,13 +111,14 @@ class MonitorUiTest : public QObject
             ZoneRule r;
             r.name = QString("实验区域%1").arg(i + 1);
             r.holdMs = 0;
-            defaults.append(MonitorService::encodeRule(r));
+            defaults.append(ZoneRuleCodec::encode(r));
         }
         MonitorService service;
+        MonitorController uiController(&service);
         service.initialize(path, defaults);
         service.session(true, true);
         {
-            MonitorDialog dialog(&service, {0, 1, 2, 3}, 500);
+            MonitorDialog dialog(&uiController, {0, 1, 2, 3}, 500);
             dialog.show();
             QTest::qWait(100);
             auto *tabs = dialog.findChild<QTabWidget *>();
@@ -160,7 +164,7 @@ class MonitorUiTest : public QObject
         QVERIFY(dir.isValid());
         const auto path = dir.filePath("ui-history.db");
         {
-            DatabaseManager schema(path);
+            DatabaseBootstrap schema(path);
             QString error;
             QVERIFY2(schema.initialize(&error), qPrintable(error));
         }
@@ -168,9 +172,10 @@ class MonitorUiTest : public QObject
         for (int i = 0; i < 4; ++i) {
             ZoneRule rule;
             rule.name = QString("区域%1").arg(i + 1);
-            defaults.append(MonitorService::encodeRule(rule));
+            defaults.append(ZoneRuleCodec::encode(rule));
         }
         MonitorService service;
+        MonitorController uiController(&service);
         service.initialize(path, defaults);
         auto db = QSqlDatabase::addDatabase("QSQLITE", "ui-history-inspector");
         db.setDatabaseName(path);
@@ -198,7 +203,7 @@ class MonitorUiTest : public QObject
             QVERIFY(db.commit());
         }
         {
-            MonitorDialog dialog(&service, {0}, 500);
+            MonitorDialog dialog(&uiController, {0}, 500);
             dialog.show();
             auto *tabs = dialog.findChild<QTabWidget *>();
             auto *alarms = dialog.findChild<QTableWidget *>("businessAlarmTable");
@@ -247,7 +252,7 @@ class MonitorUiTest : public QObject
             service.refresh();
             QCOMPARE(tasks->item(tasks->currentRow(), 0)->text(), QString("1"));
             // Test the actual export click without opening a file dialog or writing user files.
-            QObject::disconnect(&service, SIGNAL(reportReady(QString)), &dialog, nullptr);
+            QObject::disconnect(&uiController, SIGNAL(reportReady(QString)), &dialog, nullptr);
             QSignalSpy reports(&service, &MonitorService::reportReady);
             QTest::mouseClick(dialog.findChild<QPushButton *>("exportTaskReport"), Qt::LeftButton);
             QTRY_COMPARE(reports.size(), 1);

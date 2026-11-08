@@ -1,7 +1,7 @@
 #pragma once
 #include <QDialog>
 #include <QVariantMap>
-class MonitorService;
+class MonitorController;
 class QTableWidget;
 class QLineEdit;
 class QLabel;
@@ -12,13 +12,13 @@ class MonitorDialog final : public QDialog
 {
     Q_OBJECT
   public:
-    MonitorDialog(MonitorService *service, const QList<int> &enabledZones, int intervalMs,
+    MonitorDialog(MonitorController *controller, const QList<int> &enabledZones, int intervalMs,
                   QWidget *parent = nullptr);
 
   private:
     void updateView(const QVariantMap &view);
     void refresh();
-    MonitorService *m_service;
+    MonitorController *m_controller;
     QTableWidget *m_rules, *m_alarms, *m_tasks;
     QLineEdit *m_name;
     QLabel *m_hint;
