@@ -12,12 +12,52 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QGroupBox>
+#include <QCheckBox>
 #include "sensorconfigdialog.h"
 #include <limits>
 
 class WindowLifecycleTests : public QObject {
     Q_OBJECT
 private slots:
+    void reconnectUiDoesNotShowOldReadings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        MainWindow window(nullptr, dir.path());
+        QTRY_VERIFY(window.m_monitorReady);
+        QVERIFY(window.m_autoReconnect->isChecked());
+        window.m_autoReconnect->setChecked(false);
+        QVERIFY(window.saveConfig());
+        QVERIFY(!ConfigStore::load(dir.filePath("config.ini")).autoReconnect);
+
+        // Exercise the UI boundary without opening a physical serial device.
+        emit window.m_controller->sessionChanged(true);
+        emit window.m_controller->connectionStateChanged(AcquisitionController::Connected);
+        QVERIFY(!window.m_btnConnect->isEnabled());
+        QVERIFY(window.m_btnDisconnect->isEnabled());
+        QVERIFY(!window.m_autoReconnect->isEnabled());
+        window.handleSample(0, 25, 50);
+        QCOMPARE(window.m_edtTemperature[0]->text(), QString("25.0"));
+        emit window.m_controller->connectionStateChanged(AcquisitionController::Reconnecting);
+        QCOMPARE(window.m_edtTemperature[0]->text(), QString("--"));
+        QCOMPARE(window.m_edtHumidity[0]->text(), QString("--"));
+        QVERIFY(window.m_sensorBoxes[0]->title().contains("等待重连"));
+        window.handleSample(0, 99, 50);
+        QCOMPARE(window.m_edtTemperature[0]->text(), QString("--"));
+        emit window.m_monitor->statusReady(0, "测试区域", "正常");
+        QVERIFY(!window.m_sensorBoxes[0]->title().contains("正常"));
+        emit window.m_controller->connectionStateChanged(AcquisitionController::Connected);
+        emit window.m_monitor->statusReady(0, "测试区域", "正常");
+        QVERIFY(window.m_sensorBoxes[0]->title().contains("等待数据"));
+        window.handleSample(0, 26, 51);
+        emit window.m_monitor->statusReady(0, "测试区域", "正常");
+        QVERIFY(window.m_sensorBoxes[0]->title().contains("正常"));
+        emit window.m_controller->connectionStateChanged(AcquisitionController::Stopped);
+        emit window.m_controller->sessionChanged(false);
+        QVERIFY(window.m_btnConnect->isEnabled());
+        QVERIFY(!window.m_btnDisconnect->isEnabled());
+        QVERIFY(window.m_autoReconnect->isEnabled());
+        QCOMPARE(window.m_edtTemperature[0]->text(), QString("--"));
+    }
     void initTestCase() {
 #ifdef Q_OS_WIN
         const int id = QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");

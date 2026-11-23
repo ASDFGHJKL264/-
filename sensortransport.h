@@ -30,5 +30,6 @@ public:
     bool isReady() const override;
     void read(quint64 request, const SensorConfig &sensor) override;
 private:
-    QModbusRtuSerialClient m_client;
+    QModbusRtuSerialClient *m_client = nullptr;
+    quint64 m_generation = 0;
 };

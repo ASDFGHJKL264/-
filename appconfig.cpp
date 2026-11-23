@@ -18,6 +18,7 @@ AppConfig ConfigStore::load(const QString &path)
     config.pollIntervalMs =
         qBound(100, settings.value("Acquisition/intervalMs", 500).toInt(), 60000);
     config.simulatorEnabled = settings.value("Acquisition/simulator", false).toBool();
+    config.autoReconnect = settings.value("Acquisition/autoReconnect", true).toBool();
     config.temperatureMin = settings.value("Alarm/tempMin", -20.0).toDouble();
     config.temperatureMax = settings.value("Alarm/tempMax", 60.0).toDouble();
     config.humidityMin = settings.value("Alarm/humMin", 10.0).toDouble();
@@ -126,6 +127,7 @@ bool ConfigStore::save(const QString &path, const AppConfig &config, QString *er
         settings.setValue("Serial/stopbits", config.stopBits);
         settings.setValue("Acquisition/intervalMs", config.pollIntervalMs);
         settings.setValue("Acquisition/simulator", config.simulatorEnabled);
+        settings.setValue("Acquisition/autoReconnect", config.autoReconnect);
         settings.setValue("Alarm/tempMin", config.temperatureMin);
         settings.setValue("Alarm/tempMax", config.temperatureMax);
         settings.setValue("Alarm/humMin", config.humidityMin);

@@ -6,39 +6,90 @@
 
 RtuTransport::RtuTransport(QObject *parent) : SensorTransport(parent)
 {
-    connect(&m_client, &QModbusDevice::stateChanged, this, [this](QModbusDevice::State s) {
-        if (s == QModbusDevice::ConnectedState) emit connected();
-        if (s == QModbusDevice::UnconnectedState) emit disconnected(m_client.errorString());
-    });
 }
 bool RtuTransport::open(const AppConfig &c)
 {
-    m_client.setConnectionParameter(QModbusDevice::SerialPortNameParameter, c.port);
-    m_client.setConnectionParameter(QModbusDevice::SerialBaudRateParameter, c.baud);
-    m_client.setConnectionParameter(QModbusDevice::SerialDataBitsParameter, c.dataBits);
+    close();
+    // Each attempt owns a fresh client: old state/reply callbacks cannot identify
+    // themselves as the new connection after a quick stop/start or reconnect.
+    auto *client = new QModbusRtuSerialClient(this);
+    m_client = client;
+    const auto generation = m_generation;
+    connect(client, &QModbusDevice::stateChanged, this,
+            [this, client, generation](QModbusDevice::State state) {
+        if (client != m_client || generation != m_generation) return;
+        if (state == QModbusDevice::ConnectedState) emit connected();
+        if (state == QModbusDevice::UnconnectedState) emit disconnected(client->errorString());
+    });
+    connect(client, &QModbusDevice::errorOccurred, this,
+            [this, client, generation](QModbusDevice::Error error) {
+        if (client == m_client && generation == m_generation
+            && error == QModbusDevice::ConnectionError)
+            emit disconnected(client->errorString());
+    });
+    client->setConnectionParameter(QModbusDevice::SerialPortNameParameter, c.port);
+    client->setConnectionParameter(QModbusDevice::SerialBaudRateParameter, c.baud);
+    client->setConnectionParameter(QModbusDevice::SerialDataBitsParameter, c.dataBits);
     const auto parity = c.parity == "奇校验" ? QSerialPort::OddParity
                       : c.parity == "偶校验" ? QSerialPort::EvenParity : QSerialPort::NoParity;
-    m_client.setConnectionParameter(QModbusDevice::SerialParityParameter, parity);
-    m_client.setConnectionParameter(QModbusDevice::SerialStopBitsParameter,
+    client->setConnectionParameter(QModbusDevice::SerialParityParameter, parity);
+    client->setConnectionParameter(QModbusDevice::SerialStopBitsParameter,
                                    c.stopBits == 2 ? QSerialPort::TwoStop : QSerialPort::OneStop);
-    m_client.setTimeout(qMax(300, c.pollIntervalMs));
-    m_client.setNumberOfRetries(1);
-    return m_client.connectDevice();
+    client->setTimeout(qMax(300, c.pollIntervalMs));
+    client->setNumberOfRetries(1);
+    const bool opened = client->connectDevice();
+    // Inspect the I/O device after open; some backends create it lazily.
+    if (client == m_client && generation == m_generation) {
+        if (auto *serial = qobject_cast<QSerialPort *>(client->device())) {
+            connect(serial, &QSerialPort::errorOccurred, this,
+                    [this, client, generation, serial](QSerialPort::SerialPortError error) {
+                // A single slave timeout/protocol exception must not reconnect the bus.
+                if (client == m_client && generation == m_generation
+                    && error == QSerialPort::ResourceError)
+                    emit disconnected(serial->errorString());
+            });
+        }
+    }
+    return opened && client == m_client && generation == m_generation;
 }
-void RtuTransport::close() { m_client.disconnectDevice(); }
-bool RtuTransport::isReady() const { return m_client.state() == QModbusDevice::ConnectedState; }
+void RtuTransport::close()
+{
+    auto *client = m_client;
+    m_client = nullptr;
+    ++m_generation;
+    if (!client) return;
+    client->disconnect(this);
+    client->disconnectDevice();
+    client->deleteLater();
+}
+bool RtuTransport::isReady() const
+{
+    return m_client && m_client->state() == QModbusDevice::ConnectedState
+        && m_client->device() && m_client->device()->isOpen();
+}
 void RtuTransport::read(quint64 request, const SensorConfig &sensor)
 {
+    auto *client = m_client;
+    const auto generation = m_generation;
+    if (!isReady()) {
+        emit completed(request, false, 0, 0, "串口未连接");
+        return;
+    }
     const int first = qMin(sensor.temperatureRegister, sensor.humidityRegister);
     const int count = qAbs(sensor.temperatureRegister - sensor.humidityRegister) + 1;
     QModbusDataUnit unit(sensor.useInputRegisters ? QModbusDataUnit::InputRegisters
                                                 : QModbusDataUnit::HoldingRegisters, first, count);
-    auto *reply = m_client.sendReadRequest(unit, sensor.slaveId);
+    auto *reply = client->sendReadRequest(unit, sensor.slaveId);
     if (!reply) {
-        emit completed(request, false, 0, 0, m_client.errorString());
+        if (client == m_client && generation == m_generation)
+            emit completed(request, false, 0, 0, client->errorString());
         return;
     }
-    const auto finish = [this, reply, request, sensor, first] {
+    const auto finish = [this, client, generation, reply, request, sensor, first] {
+        if (client != m_client || generation != m_generation) {
+            reply->deleteLater();
+            return;
+        }
         const auto data = reply->result();
         const int ti = sensor.temperatureRegister - first, hi = sensor.humidityRegister - first;
         const bool ok = reply->error() == QModbusDevice::NoError

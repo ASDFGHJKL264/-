@@ -14,6 +14,7 @@
 #include <cmath>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QGridLayout>
@@ -159,6 +160,16 @@ void MainWindow::initUI()
     connectionButtons->addWidget(m_btnDisconnect);
     connectionButtons->addWidget(m_btnSaveCfg);
     communicationLayout->addLayout(connectionButtons, 3, 0, 1, 4);
+    auto *connectionStatus = new QHBoxLayout;
+    m_autoReconnect = new QCheckBox("意外断线自动重连");
+    m_autoReconnect->setObjectName("autoReconnect");
+    m_autoReconnect->setToolTip("只重试本次选择的端口；采集中不可更改。点击断开连接可取消等待或连接尝试。");
+    m_connectionLabel = new QLabel("通信状态：采集已停止");
+    m_connectionLabel->setObjectName("connectionState");
+    m_connectionLabel->setWordWrap(true);
+    connectionStatus->addWidget(m_autoReconnect);
+    connectionStatus->addWidget(m_connectionLabel, 1);
+    communicationLayout->addLayout(connectionStatus, 4, 0, 1, 4);
     communicationLayout->setColumnStretch(1, 1);
     communicationLayout->setColumnStretch(3, 1);
 
@@ -304,6 +315,7 @@ void MainWindow::applyConfigToUi()
     m_cbxParity->setCurrentText(m_config.parity);
     m_cbxDataBit->setCurrentText(QString::number(m_config.dataBits));
     m_cbxStopBit->setCurrentText(QString::number(m_config.stopBits));
+    m_autoReconnect->setChecked(m_config.autoReconnect);
     for (int i = 0; i < kSensorLimit; ++i) {
         const bool enabled = m_config.sensors[i].enabled;
         m_plot->graph(i * 2)->setVisible(enabled);
@@ -328,6 +340,7 @@ AppConfig MainWindow::configWithSerialUi(AppConfig candidate) const
     candidate.parity = m_cbxParity->currentText();
     candidate.dataBits = m_cbxDataBit->currentText().toInt();
     candidate.stopBits = m_cbxStopBit->currentText().toInt();
+    candidate.autoReconnect = m_autoReconnect->isChecked();
     return candidate;
 }
 
@@ -413,11 +426,15 @@ void MainWindow::toggleConnect()
     config.parity = m_cbxParity->currentText();
     config.dataBits = m_cbxDataBit->currentText().toInt();
     config.stopBits = m_cbxStopBit->currentText().toInt();
+    config.autoReconnect = m_autoReconnect->isChecked();
     m_controller->start(config);
 }
 
 void MainWindow::handleSample(int index, double temperature, double humidity)
 {
+    if (!m_collecting || !m_linkReady || index < 0 || index >= kSensorLimit)
+        return;
+    m_hasCurrentSample[index] = true;
     m_edtTemperature[index]->setText(QString::number(temperature, 'f', 1));
     m_edtHumidity[index]->setText(QString::number(humidity, 'f', 1));
     updatePlot(index, temperature, humidity);
@@ -430,12 +447,36 @@ void MainWindow::initializeMonitoring()
     connect(m_controller, &MonitoringController::logMessage, this, &MainWindow::printLog);
     connect(m_controller, &MonitoringController::ready, this, [this](bool ok) {
         m_monitorReady = ok;
-        m_btnConnect->setEnabled(ok);
+        m_btnConnect->setEnabled(ok && !m_collecting);
     });
     m_btnConnect->setEnabled(false);
+    m_btnDisconnect->setEnabled(false);
+    connect(m_controller, &MonitoringController::connectionStateChanged, this,
+            [this](AcquisitionController::ConnectionState state) {
+        m_linkReady = state == AcquisitionController::Connected;
+        switch (state) {
+        case AcquisitionController::Stopped: m_linkStatus = "采集已停止"; break;
+        case AcquisitionController::Connecting: m_linkStatus = "连接中"; break;
+        case AcquisitionController::Connected: m_linkStatus = "已连接，等待数据"; break;
+        case AcquisitionController::Reconnecting: m_linkStatus = "等待重连"; break;
+        }
+        m_connectionLabel->setText("通信状态：" + m_linkStatus);
+        for (int i = 0; i < kSensorLimit; ++i) {
+            m_hasCurrentSample[i] = false;
+            m_edtTemperature[i]->setText("--");
+            m_edtHumidity[i]->setText("--");
+            m_sensorBoxes[i]->setTitle(QString("模块%1 · %2 · %3").arg(i + 1)
+                .arg(m_config.sensors[i].name,
+                     m_config.sensors[i].enabled ? m_linkStatus : "未启用"));
+        }
+    });
     connect(m_controller, &MonitoringController::sampleReady, this, &MainWindow::handleSample);
     connect(m_controller, &MonitoringController::sessionChanged, this, [this](bool active) {
         m_collecting = active;
+        m_btnConnect->setEnabled(m_monitorReady && !active);
+        m_btnDisconnect->setEnabled(active);
+        m_btnDisconnect->setText(active ? "断开 / 取消重连" : "断开连接");
+        m_autoReconnect->setEnabled(!active);
         for (auto *box : {m_cbxPort, m_cbxBaud, m_cbxParity, m_cbxDataBit, m_cbxStopBit})
             box->setEnabled(!active);
         m_btnSaveCfg->setEnabled(!active);
@@ -446,7 +487,13 @@ void MainWindow::initializeMonitoring()
     auto *metricsTimer = new QTimer(this);
     connect(metricsTimer, &QTimer::timeout, this, [this] {
         const auto m = m_controller->metrics();
-        statusBar()->showMessage(QString("读取成功 %1 / 失败 %2 · 待存储 %3/64 · 保存 %4 / 失败 %5 · 日志丢弃 %6")
+        const auto link = m["connectionState"].toString();
+        m_connectionLabel->setText(QString("通信状态：%1 · 重连尝试 %2 / 成功 %3 · 离线 %4 秒")
+            .arg(link).arg(m["reconnectAttempts"].toULongLong())
+            .arg(m["reconnectSuccesses"].toULongLong())
+            .arg(m["offlineMs"].toLongLong() / 1000));
+        statusBar()->showMessage(QString("%1 · 读取成功 %2 / 失败 %3 · 待存储 %4/64 · 保存 %5 / 失败 %6 · 日志丢弃 %7")
+            .arg(link)
             .arg(m["successfulReads"].toULongLong()).arg(m["failedReads"].toULongLong())
             .arg(m["pending"].toInt()).arg(m["saved"].toULongLong())
             .arg(m["storageFailed"].toULongLong()).arg(m_logger->dropped()));
@@ -466,9 +513,11 @@ void MainWindow::initializeMonitoring()
     connect(m_monitor, &MonitorController::statusReady, this,
             [this](int i, const QString &name, const QString &state) {
                 const bool enabled = m_config.sensors[i].enabled;
-                const QString shown = !enabled ? "未启用" : !m_collecting ? "采集已停止" : state;
+                const QString shown = !enabled ? "未启用" : !m_collecting ? "采集已停止"
+                    : !m_linkReady ? m_linkStatus : !m_hasCurrentSample[i] ? "等待数据" : state;
                 m_sensorBoxes[i]->setTitle(QString("模块%1 · %2 · %3").arg(i + 1).arg(name, shown));
-                if (!enabled || !m_collecting || state.contains("失效") || state == "等待数据") {
+                if (!enabled || !m_collecting || !m_linkReady || !m_hasCurrentSample[i]
+                    || state.contains("失效") || state == "等待数据") {
                     m_edtTemperature[i]->setText("--");
                     m_edtHumidity[i]->setText("--");
                 }

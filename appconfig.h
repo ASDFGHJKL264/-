@@ -18,6 +18,7 @@ struct AppConfig {
     int stopBits = 1;
     int pollIntervalMs = 500;
     bool simulatorEnabled = false;
+    bool autoReconnect = true; // Retry unexpected disconnects on the same serial port.
     double temperatureMin = -20.0, temperatureMax = 60.0;
     double humidityMin = 10.0, humidityMax = 90.0;
     SensorConfig sensors[4];

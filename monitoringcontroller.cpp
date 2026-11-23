@@ -19,6 +19,8 @@ MonitoringController::MonitoringController(const QString &path, const AppConfig 
     });
     connect(m_service, &MonitorService::logMessage, this, &MonitoringController::logMessage);
     connect(&m_acquisition, &AcquisitionController::logMessage, this, &MonitoringController::logMessage);
+    connect(&m_acquisition, &AcquisitionController::connectionStateChanged,
+            this, &MonitoringController::connectionStateChanged);
     connect(m_service, &MonitorService::sessionRejected, this, &MonitoringController::stop);
     connect(&m_acquisition, &AcquisitionController::sessionChanged, this,
             [this](bool active, bool simulator) {

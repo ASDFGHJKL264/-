@@ -18,6 +18,8 @@ class MonitoringController;
 class AsyncLogger;
 class QGroupBox;
 class MonitorDialog;
+class QCheckBox;
+class QLabel;
 
 class MainWindow final : public QMainWindow
 {
@@ -57,6 +59,8 @@ class MainWindow final : public QMainWindow
     QPushButton *m_btnConnect = nullptr;
     QPushButton *m_btnDisconnect = nullptr;
     QPushButton *m_btnSaveCfg = nullptr;
+    QCheckBox *m_autoReconnect = nullptr;
+    QLabel *m_connectionLabel = nullptr;
     QLineEdit *m_edtHumidity[4]{};
     QLineEdit *m_edtTemperature[4]{};
     QTextEdit *m_txtLog = nullptr;
@@ -74,6 +78,9 @@ class MainWindow final : public QMainWindow
     QPointer<MonitorDialog> m_monitorDialog;
     bool m_monitorReady = false, m_taskActive = false, m_collecting = false;
     bool m_businessLocked = false;
+    bool m_linkReady = false;
+    bool m_hasCurrentSample[4]{};
+    QString m_linkStatus = "采集已停止";
 };
 
 #endif

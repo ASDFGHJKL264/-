@@ -1,6 +1,6 @@
 # Windows 发布与安装
 
-发布版本：2026.11.08.1。使用 Release 构建，安装包带 Qt、MinGW 运行库、SerialBus/SerialPort 与 SQLite 插件。
+发布版本：2026.11.23.1。使用 Release 构建，安装包带 Qt、MinGW 运行库、SerialBus/SerialPort 与 SQLite 插件。
 
 双击安装包，默认安装至 `D:\温湿度数据采集系统`，创建或更新桌面快捷方式。便携 ZIP 解压后可运行 `温湿度数据采集系统.exe`。新安装从 `config.example.ini` 创建配置；更新保留原 `config.ini`、`data` 和 `logs`。
 
@@ -9,6 +9,22 @@
 复现打包：先执行 `scripts/verify.ps1 -LifecycleCycles 100`，再执行 `python scripts/package.py`。Qt、编译器、CMake、Ninja、7-Zip、WinRAR 路径可由命令行参数覆盖。需要现有 7-Zip 与 WinRAR SFX 模块，不自动安装工具。
 
 产物写入独立 `dist/release-*`，`dist/latest-release.json` 记录路径及哈希。运行目录有源码清单 `release-manifest.json` 和运行文件校验 `SHA256.json`。`install.ps1` 支持 `-InstallDirectory`、`-NoShortcuts`、`-Quiet` 进行隔离安装验证。当前为本地自解压安装器，没有卸载注册项或代码签名；真实硬件测量和长期运行仍按项目验证说明执行。
+
+## 2026-11-23 意外断线自动重连
+
+主界面新增“意外断线自动重连”开关（默认开启，保存于 Acquisition/autoReconnect），
+将采集会话与物理连接状态分离。串口意外掉线后保持监测任务，以1/2/4/8/16/30秒退避
+重试原端口；手动断开或退出会取消重试。首次手动打开立即失败仍停止，不自动换端口。
+单从站超时不重建整个总线，模拟器不受重连影响。
+
+新连接使用独立RTU客户端与代次保护，旧状态/错误/回复不能污染新连接。
+重连中显示等待与空读数，恢复后等有效样本，不自动解除旧报警；存储额度保留。
+通信状态栏提供本会话重连尝试/成功和累计连接离线时长，详细口径见 BUSINESS_GUIDE.md。
+
+增加取消、退避上限、旧回复、背压/连接期限、关闭、UI和配置回归，以及后台任务、
+未恢复报警及缺失覆盖连续性验证。全部7组CTest及100轮模拟采集/查询/关闭通过。
+未完成真实USB拔插或长期硬件验证，不据此宣称生产级现场可靠性。
+安装仍保留config.ini、data和logs，无数据库迁移。
 
 ## 2026-11-08 模块职责整理
 

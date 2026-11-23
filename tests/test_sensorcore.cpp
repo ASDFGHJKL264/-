@@ -86,11 +86,13 @@ void SensorCoreTest::configReadWrite()
     const QString path = directory.filePath("config.ini");
     auto config = ConfigStore::load(path);
     config.port = "COM8"; config.baud = 19200;
+    config.autoReconnect = false;
     config.sensors[1].enabled = true; config.sensors[1].slaveId = 7;
     QString error;
     QVERIFY2(ConfigStore::save(path, config, &error), qPrintable(error));
     const auto read = ConfigStore::load(path);
     QCOMPARE(read.port, QString("COM8")); QCOMPARE(read.baud, 19200);
+    QVERIFY(!read.autoReconnect);
     QVERIFY(read.sensors[1].enabled); QCOMPARE(read.sensors[1].slaveId, 7);
     config.sensors[1].slaveId = config.sensors[0].slaveId;
     QVERIFY(!ConfigStore::save(path, config, &error));
@@ -161,6 +163,7 @@ void SensorCoreTest::configDefaultsAndClamping()
     QSettings settings(directory.filePath("missing.ini"), QSettings::IniFormat);
     QCOMPARE(ConfigStore::load(settings.fileName()).port, QString("COM1"));
     QCOMPARE(ConfigStore::load(settings.fileName()).pollIntervalMs, 500);
+    QVERIFY(ConfigStore::load(settings.fileName()).autoReconnect);
     settings.setValue("Acquisition/intervalMs", 10);
     settings.sync();
     auto config = ConfigStore::load(settings.fileName());

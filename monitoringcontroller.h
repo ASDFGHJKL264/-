@@ -21,6 +21,7 @@ signals:
     void ready(bool ok);
     void sampleReady(int zone, double temperature, double humidity);
     void sessionChanged(bool active);
+    void connectionStateChanged(AcquisitionController::ConnectionState state);
     void logMessage(const QString &message, bool warning);
 private:
     AcquisitionController m_acquisition;
